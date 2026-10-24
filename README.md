@@ -28,7 +28,7 @@ npm run preview
 - Orbit, pan and zoom the 3D model. Click a stitch to inspect its round, position, type, source line and parent connections.
 - Switch between **Stitches** and **Structure**, adjust display stitch size, reset the camera or use fullscreen.
 - Scrub through rounds, step forward/back or play the construction sequence.
-- Recognize stitch types by shape: round **SC** bubbles, elongated **HDC** beads, longer **DC** beads and the tallest **TR** beads. Chains and slip stitches are flattened; decreases are wide beads. The shape key shows the types in the visible rounds while yarn colors retain their pattern meaning.
+- Recognize stitch types by shape: round **SC** bubbles, elongated **HDC** beads, longer **DC** beads and the tallest **TR** beads. Beads align with their parent connections to follow the fabric's slope; two-parent stitches use the parents' midpoint. Tall stitch bodies extend down from their upper row anchor along the connection and are bounded by the space between rows. Chains and slip stitches are flattened; decreases are wide beads. The shape key shows the types in the visible rounds while yarn colors retain their pattern meaning.
 - Load the **Mushroom cap**, **Little sphere**, **Everyday basket** or **Stitch sampler** examples. The sampler uses one color to compare stitch shapes directly.
 - Import `.crochet` / `.txt` patterns or version-1 Loopform `.json` projects. Export pattern text, an editable project or a PNG of the current model view.
 - Pattern text and display thickness are saved in this browser's local storage when available. Export a file to keep a portable copy; browser storage is not a backup.
@@ -85,6 +85,7 @@ Flat rows, turns, BLO/FLO, separate-component sewing, specialized hdc decreases 
 - `src/components/PatternEditor.tsx`: CodeMirror editor and source-line selection.
 - `src/components/ModelViewer.tsx`: Three.js rendering, camera controls, picking and PNG capture.
 - `src/lib/stitchAppearance.ts` and `src/components/StitchLegend.tsx`: shared stitch-shape definitions and the visible-round shape key.
+- `src/lib/stitchFrame.ts`: parent-aligned bead rotations and rotated bounds.
 - `src/App.tsx`: workspace, rendering controls, playback, import/export and local persistence.
 - `src/styles.css`: workspace layout and styling.
 - `src/lib/*.test.ts`: parser and geometry regression checks.

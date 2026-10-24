@@ -2,6 +2,7 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -9,6 +10,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { ModelGeometry } from "../lib/geometry";
 import { getStitchAppearance } from "../lib/stitchAppearance";
+import { buildStitchFrames } from "../lib/stitchFrame";
 import { frameModelBounds } from "../lib/viewFraming";
 import "./ModelViewer.css";
 
@@ -40,6 +42,7 @@ interface ViewerRuntime {
   activePoints: Point[];
   marker: THREE.Mesh;
   selectionScale: THREE.Vector3;
+  selectionRotation: THREE.Quaternion;
   reset: () => void;
 }
 
@@ -109,6 +112,17 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
     const host = useRef<HTMLDivElement>(null);
     const runtime = useRef<ViewerRuntime | null>(null);
     const modelRef = useRef(model);
+    const frames = useMemo(
+      () =>
+        buildStitchFrames(
+          model?.points ?? [],
+          (mode === "structure" ? 0.062 : 0.25) * thickness,
+          mode === "stitches",
+        ),
+      [model, mode, thickness],
+    );
+    const framesRef = useRef(frames);
+    framesRef.current = frames;
     const displayRef = useRef({ mode, thickness });
     const selectCallback = useRef(onSelect);
     const lastModel = useRef<ModelGeometry | null>(null);
@@ -237,10 +251,10 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         const radius =
           (display.mode === "structure" ? 0.062 : 0.25) * display.thickness;
         for (const point of modelRef.current?.points ?? []) {
-          const scale = getStitchAppearance(point.type).scale;
-          const center = new THREE.Vector3().fromArray(point.position);
-          const extent = new THREE.Vector3()
-            .fromArray(scale)
+          const center = framesRef.current.get(point.id)!.position.clone();
+          const extent = framesRef.current
+            .get(point.id)!
+            .extent.clone()
             .multiplyScalar(radius);
           bounds.expandByPoint(center.clone().sub(extent));
           bounds.expandByPoint(center.add(extent));
@@ -283,6 +297,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         activePoints: [],
         marker,
         selectionScale: new THREE.Vector3(1, 1, 1),
+        selectionRotation: new THREE.Quaternion(),
         reset,
       };
       runtime.current = current;
@@ -394,18 +409,34 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       renderer.domElement.addEventListener("pointerleave", pointerLeave);
 
       let frame = 0;
+      const screenRight = new THREE.Vector3();
+      const screenUp = new THREE.Vector3();
+      const inverseRotation = new THREE.Quaternion();
       const animate = () => {
         controls.update();
         marker.quaternion.copy(camera.quaternion);
         if (marker.visible) {
-          // Project the bead's dimensions onto the camera axes so the selection
-          // outline still encloses a tall stitch after orbiting above the model.
+          // Project the oriented ellipsoid into the camera plane, including
+          // its tilt, so selection follows the bead as the camera orbits.
           camera.updateMatrixWorld();
           const matrix = camera.matrixWorld.elements;
-          const { x, y, z } = current.selectionScale;
+          inverseRotation.copy(current.selectionRotation).invert();
+          screenRight
+            .set(matrix[0], matrix[1], matrix[2])
+            .applyQuaternion(inverseRotation)
+            .multiply(current.selectionScale);
+          screenUp
+            .set(matrix[4], matrix[5], matrix[6])
+            .applyQuaternion(inverseRotation)
+            .multiply(current.selectionScale);
+          const a = screenRight.lengthSq(),
+            c = screenUp.lengthSq(),
+            b = screenRight.dot(screenUp);
+          const spread = Math.hypot(a - c, 2 * b);
+          marker.rotateZ(0.5 * Math.atan2(2 * b, a - c));
           marker.scale.set(
-            Math.hypot(x * matrix[0], y * matrix[1], z * matrix[2]),
-            Math.hypot(x * matrix[4], y * matrix[5], z * matrix[6]),
+            Math.sqrt((a + c + spread) / 2),
+            Math.sqrt(Math.max(0, (a + c - spread) / 2)),
             1,
           );
         }
@@ -467,9 +498,10 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       const transform = new THREE.Object3D();
       const color = new THREE.Color();
       active.forEach((point, index) => {
-        transform.position.fromArray(point.position);
-        transform.scale.fromArray(getStitchAppearance(point.type).scale);
-        transform.rotation.set(0, 0, 0);
+        const frame = frames.get(point.id)!;
+        transform.position.copy(frame.position);
+        transform.scale.copy(frame.scale);
+        transform.quaternion.copy(frame.rotation);
         transform.updateMatrix();
         nodes.setMatrixAt(index, transform.matrix);
         nodes.setColorAt(index, color.set(point.color));
@@ -529,8 +561,8 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         Math.min(
           ...model.points.map(
             (point) =>
-              point.position[1] -
-              nodeRadius * getStitchAppearance(point.type).scale[1],
+              frames.get(point.id)!.position.y -
+              nodeRadius * frames.get(point.id)!.extent.y,
           ),
         ) - 0.05;
       const shadow = createShadow(
@@ -544,7 +576,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         current.reset();
         lastModel.current = model;
       }
-    }, [model, visibleRounds, thickness, mode]);
+    }, [model, frames, visibleRounds, thickness, mode]);
 
     useEffect(() => {
       const current = runtime.current;
@@ -554,12 +586,13 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       );
       current.marker.visible = Boolean(point);
       if (point) {
-        current.marker.position.fromArray(point.position);
+        current.marker.position.copy(frames.get(point.id)!.position);
+        current.selectionRotation.copy(frames.get(point.id)!.rotation);
         current.selectionScale
           .fromArray(getStitchAppearance(point.type).scale)
           .multiplyScalar(thickness * (mode === "structure" ? 0.35 : 1));
       }
-    }, [selectedStitch, visibleRounds, thickness, mode, model]);
+    }, [selectedStitch, visibleRounds, thickness, mode, model, frames]);
 
     return (
       <div className="model-viewer" ref={host}>
