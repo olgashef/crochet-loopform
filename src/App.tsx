@@ -20,6 +20,8 @@ import {
   Maximize2,
   Minus,
   MousePointer2,
+  MoveVertical,
+  Undo2,
   Pause,
   Play,
   Plus,
@@ -30,8 +32,44 @@ import {
 import { PatternEditor } from "./components/PatternEditor";
 import { ModelViewer, type ViewerHandle } from "./components/ModelViewer";
 import { StitchLegend } from "./components/StitchLegend";
+import { sanitizeRowOffsets, type RowOffsets } from "./lib/rowOffsets";
 import { buildGeometry } from "./lib/geometry";
 import { EXAMPLES, parsePattern, YARN_COLORS } from "./lib/pattern";
+
+function RowOffsetInput({
+  value,
+  onCommit,
+}: {
+  value: number;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  const [focused, setFocused] = useState(false);
+  useEffect(() => {
+    if (!focused) setDraft(String(Number(value.toFixed(3))));
+  }, [value, focused]);
+  return (
+    <input
+      aria-label="Row vertical offset"
+      type="number"
+      step="0.1"
+      min="-1000"
+      max="1000"
+      value={draft}
+      onFocus={() => setFocused(true)}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        setFocused(false);
+        const next = Number(draft);
+        if (draft.trim() && Number.isFinite(next)) onCommit(next);
+        else setDraft(String(value));
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+      }}
+    />
+  );
+}
 
 const STORAGE_KEY = "loopform.workspace.v1";
 const STITCH_NAMES: Record<string, string> = {
@@ -48,6 +86,7 @@ function readWorkspace(): {
   source: string;
   compiledSource: string;
   thickness: number;
+  rowOffsets: RowOffsets;
 } {
   try {
     const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
@@ -65,6 +104,10 @@ function readWorkspace(): {
       return {
         source: value.source,
         compiledSource,
+        rowOffsets:
+          compiledSource === candidate
+            ? sanitizeRowOffsets(value.rowOffsets)
+            : {},
         thickness: Number.isFinite(value.thickness)
           ? Math.min(1.65, Math.max(0.6, value.thickness))
           : 1,
@@ -77,6 +120,7 @@ function readWorkspace(): {
     source: EXAMPLES[0].source,
     compiledSource: EXAMPLES[0].source,
     thickness: 1,
+    rowOffsets: {},
   };
 }
 
@@ -91,6 +135,57 @@ function saveFile(name: string, content: string, type: string) {
 
 export default function App() {
   const [initial] = useState(readWorkspace);
+  const [rowOffsets, setRowOffsets] = useState<RowOffsets>(initial.rowOffsets);
+  const rowOffsetsRef = useRef(rowOffsets);
+  rowOffsetsRef.current = rowOffsets;
+  const [moveRows, setMoveRows] = useState(false);
+  const [selectedRow, setSelectedRow] = useState<number | null>(null);
+  const [rowHistory, setRowHistory] = useState<RowOffsets[]>([]);
+  const rowHistoryRef = useRef(rowHistory);
+  rowHistoryRef.current = rowHistory;
+  const pendingMove = useRef<RowOffsets | null>(null);
+  const applyRowOffsets = useCallback((next: RowOffsets) => {
+    rowOffsetsRef.current = next;
+    setRowOffsets(next);
+  }, []);
+  const moveRow = useCallback(
+    (row: number, value: number) => {
+      if (!Number.isFinite(value)) return;
+      const next = {
+        ...rowOffsetsRef.current,
+        [row]: Math.max(-1000, Math.min(1000, value)),
+      };
+      if (Math.abs(next[row]) < 0.00001) delete next[row];
+      applyRowOffsets(next);
+    },
+    [applyRowOffsets],
+  );
+  const startRowMove = useCallback(() => {
+    pendingMove.current = { ...rowOffsetsRef.current };
+  }, []);
+  const endRowMove = useCallback((cancel = false) => {
+    const previous = pendingMove.current;
+    pendingMove.current = null;
+    if (
+      !cancel &&
+      previous &&
+      JSON.stringify(previous) !== JSON.stringify(rowOffsetsRef.current)
+    )
+      setRowHistory((h) => [...h.slice(-49), previous]);
+  }, []);
+  const undoRowMove = useCallback(() => {
+    const history = rowHistoryRef.current;
+    if (!history.length) return;
+    applyRowOffsets(history[history.length - 1]);
+    const next = history.slice(0, -1);
+    rowHistoryRef.current = next;
+    setRowHistory(next);
+  }, [applyRowOffsets]);
+  function stepRow(row: number, value: number) {
+    startRowMove();
+    moveRow(row, value);
+    endRowMove();
+  }
   const [source, setSource] = useState(initial.source);
   const [compiledSource, setCompiledSource] = useState(initial.compiledSource);
   const [thickness, setThickness] = useState(initial.thickness);
@@ -157,13 +252,18 @@ export default function App() {
       setToast("Check the highlighted line before rendering.");
       return;
     }
+    if (source !== compiledSource) {
+      applyRowOffsets({});
+      setRowHistory([]);
+      setSelectedRow(null);
+    }
     setCompiledSource(source);
     setSelectedStitch(null);
     setVisibleRounds(draft.rounds.length || 1);
     setPlaying(false);
     setRendering(true);
     window.setTimeout(() => setRendering(false), 400);
-  }, [source, draft]);
+  }, [source, compiledSource, draft, applyRowOffsets]);
 
   useEffect(() => {
     if (!autoRender || !dirty || errors.length) return;
@@ -175,13 +275,19 @@ export default function App() {
     try {
       localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ version: 1, source, compiledSource, thickness }),
+        JSON.stringify({
+          version: 1,
+          source,
+          compiledSource,
+          thickness,
+          rowOffsets,
+        }),
       );
       setSaveState("saved");
     } catch {
       setSaveState("unavailable");
     }
-  }, [source, compiledSource, thickness]);
+  }, [source, compiledSource, thickness, rowOffsets]);
 
   useEffect(() => {
     if (!playing) return;
@@ -220,11 +326,50 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (selectedRow !== null && selectedRow > currentRound)
+      setSelectedRow(null);
+  }, [selectedRow, currentRound]);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (
+        !moveRows ||
+        (e.target instanceof Element &&
+          e.target.closest('input,textarea,select,[contenteditable="true"]'))
+      )
+        return;
+      if (e.key === "Escape") {
+        setSelectedRow(null);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        undoRowMove();
+        return;
+      }
+      if (selectedRow !== null && ["ArrowUp", "ArrowDown"].includes(e.key)) {
+        e.preventDefault();
+        startRowMove();
+        moveRow(
+          selectedRow,
+          (rowOffsetsRef.current[selectedRow] || 0) +
+            (e.key === "ArrowUp" ? 1 : -1) * (e.shiftKey ? 0.5 : 0.1),
+        );
+        endRowMove();
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [moveRows, selectedRow, undoRowMove, startRowMove, moveRow, endRowMove]);
+
   function loadSource(value: string) {
     if (value.length > 120_000) {
       setToast("This pattern is too large. Use at most 120,000 characters.");
       return;
     }
+    applyRowOffsets({});
+    setRowHistory([]);
+    setSelectedRow(null);
     setSource(value);
     setSelectedStitch(null);
     setPlaying(false);
@@ -325,6 +470,7 @@ export default function App() {
                         {
                           version: 1,
                           application: "loopform",
+                          rowOffsets: dirty ? {} : rowOffsets,
                           source,
                           thickness,
                         },
@@ -338,7 +484,8 @@ export default function App() {
                 >
                   <FileJson size={17} />
                   <span>
-                    Loopform project<small>Pattern and display settings</small>
+                    Loopform project
+                    <small>Pattern, shape edits and display settings</small>
                   </span>
                 </button>
                 <button
@@ -548,6 +695,20 @@ export default function App() {
                     Structure
                   </button>
                 </div>
+                <button
+                  className={`icon-button row-mode-button ${moveRows ? "active" : ""}`}
+                  aria-label="Move rows"
+                  title="Select and move rows"
+                  aria-pressed={moveRows}
+                  onClick={() => {
+                    setMoveRows(!moveRows);
+                    setSelectedStitch(null);
+                    setPlaying(false);
+                  }}
+                >
+                  <MoveVertical size={17} />
+                  <span className="row-mode-label">Move rows</span>
+                </button>
                 <span className="toolbar-divider" />
                 <button
                   className="icon-button"
@@ -605,7 +766,127 @@ export default function App() {
                 mode={mode}
                 selectedStitch={selectedStitch}
                 onSelect={setSelectedStitch}
+                rowOffsets={rowOffsets}
+                moveRows={moveRows}
+                selectedRow={selectedRow}
+                onSelectRow={(row) => {
+                  setSelectedRow(row);
+                  setSelectedStitch(null);
+                  setPlaying(false);
+                }}
+                onRowMove={moveRow}
+                onRowDragStart={startRowMove}
+                onRowDragEnd={endRowMove}
               />
+              {moveRows && (
+                <div
+                  className="row-edit-card"
+                  aria-label="Row movement controls"
+                >
+                  <div className="row-edit-title">
+                    <MoveVertical size={14} />
+                    <strong>Move a row</strong>
+                    <button
+                      className="icon-button"
+                      aria-label="Exit row movement"
+                      onClick={() => setMoveRows(false)}
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                  <select
+                    aria-label="Selected row"
+                    value={selectedRow ?? ""}
+                    onChange={(e) =>
+                      setSelectedRow(
+                        e.target.value ? Number(e.target.value) : null,
+                      )
+                    }
+                  >
+                    <option value="">Click a row line…</option>
+                    {compiled.rounds
+                      .filter((r) => r.number <= currentRound)
+                      .map((r) => (
+                        <option value={r.number} key={r.number}>
+                          Round {r.number} · {r.outputCount} stitches
+                        </option>
+                      ))}
+                  </select>
+                  {selectedRow !== null ? (
+                    <>
+                      <label className="row-offset-label">
+                        Vertical offset
+                        <RowOffsetInput
+                          value={rowOffsets[selectedRow] || 0}
+                          onCommit={(value) => stepRow(selectedRow, value)}
+                        />
+                      </label>
+                      <div className="row-step-buttons">
+                        <button
+                          onClick={() =>
+                            stepRow(
+                              selectedRow,
+                              (rowOffsets[selectedRow] || 0) + 0.25,
+                            )
+                          }
+                          aria-label="Move selected row up"
+                        >
+                          ↑ Up
+                        </button>
+                        <button
+                          onClick={() =>
+                            stepRow(
+                              selectedRow,
+                              (rowOffsets[selectedRow] || 0) - 0.25,
+                            )
+                          }
+                          aria-label="Move selected row down"
+                        >
+                          ↓ Down
+                        </button>
+                        <button
+                          onClick={() => stepRow(selectedRow, 0)}
+                          disabled={!rowOffsets[selectedRow]}
+                        >
+                          Reset row
+                        </button>
+                      </div>
+                      <p>
+                        Drag the green arrow or the highlighted line. ↑ / ↓
+                        nudge; Shift moves faster.
+                      </p>
+                    </>
+                  ) : (
+                    <p>
+                      Grab a row line, then drag up or down. Only that row
+                      moves.
+                    </p>
+                  )}
+                  <div className="row-edit-footer">
+                    <button onClick={() => viewer.current?.frontView()}>
+                      Front view
+                    </button>
+                    <button
+                      aria-label="Undo row move"
+                      disabled={!rowHistory.length}
+                      onClick={undoRowMove}
+                    >
+                      <Undo2 size={11} /> Undo
+                    </button>
+                    <button
+                      disabled={!Object.keys(rowOffsets).length}
+                      onClick={() => {
+                        startRowMove();
+                        applyRowOffsets({});
+                        endRowMove();
+                      }}
+                    >
+                      Reset all
+                    </button>
+                  </div>
+                  <small>Shape adjustment · pattern counts stay the same</small>
+                </div>
+              )}
               <div className="view-corner">
                 <svg
                   className="axis-gizmo"
@@ -685,8 +966,14 @@ export default function App() {
               )}
               <span className="canvas-hint">
                 <MousePointer2 size={12} />
-                Drag to rotate<span>·</span>Scroll to zoom<span>·</span>Click a
-                stitch
+                {moveRows ? (
+                  "Grab a row line · Drag vertically · Esc to cancel"
+                ) : (
+                  <>
+                    Drag to rotate<span>·</span>Scroll to zoom<span>·</span>
+                    Click a stitch
+                  </>
+                )}
               </span>
             </div>
             <StitchLegend types={visibleStitchTypes} />
@@ -852,6 +1139,12 @@ export default function App() {
                   "Use a version 1 Loopform project or a plain pattern file.",
                 );
               loadSource(project.source);
+              if (
+                !parsePattern(project.source).diagnostics.some(
+                  (d) => d.severity === "error",
+                )
+              )
+                applyRowOffsets(sanitizeRowOffsets(project.rowOffsets));
               if (typeof project.thickness === "number")
                 setThickness(Math.min(1.65, Math.max(0.6, project.thickness)));
             } else loadSource(text);

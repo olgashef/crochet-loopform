@@ -13,9 +13,12 @@ import { getStitchAppearance } from "../lib/stitchAppearance";
 import { buildStitchFrames } from "../lib/stitchFrame";
 import { frameModelBounds } from "../lib/viewFraming";
 import "./ModelViewer.css";
+import { RowManipulator } from "./RowManipulator";
+import { offsetRows, type RowOffsets } from "../lib/rowOffsets";
 
 export interface ViewerHandle {
   resetView(): void;
+  frontView(): void;
   zoomIn(): void;
   zoomOut(): void;
   exportImage(): void;
@@ -23,6 +26,13 @@ export interface ViewerHandle {
 
 export interface ViewerProps {
   model: ModelGeometry | null;
+  rowOffsets: RowOffsets;
+  moveRows: boolean;
+  selectedRow: number | null;
+  onSelectRow: (row: number) => void;
+  onRowMove: (row: number, value: number) => void;
+  onRowDragStart: () => void;
+  onRowDragEnd: (cancel: boolean) => void;
   visibleRounds: number;
   thickness: number;
   mode: "stitches" | "structure";
@@ -43,7 +53,8 @@ interface ViewerRuntime {
   marker: THREE.Mesh;
   selectionScale: THREE.Vector3;
   selectionRotation: THREE.Quaternion;
-  reset: () => void;
+  reset: (direction?: THREE.Vector3) => void;
+  rows: RowManipulator;
 }
 
 interface HoveredPoint {
@@ -106,9 +117,39 @@ function createShadow(width: number, depth: number, floor: number) {
 
 export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
   function ModelViewer(
-    { model, visibleRounds, thickness, mode, selectedStitch, onSelect },
+    {
+      model: baseModel,
+      visibleRounds,
+      thickness,
+      mode,
+      selectedStitch,
+      onSelect,
+      rowOffsets,
+      moveRows,
+      selectedRow,
+      onSelectRow,
+      onRowMove,
+      onRowDragStart,
+      onRowDragEnd,
+    },
     ref,
   ) {
+    const model = useMemo(
+      () => (baseModel ? offsetRows(baseModel, rowOffsets) : null),
+      [baseModel, rowOffsets],
+    );
+    const rowCallbacks = useRef({
+      onSelectRow,
+      onRowMove,
+      onRowDragStart,
+      onRowDragEnd,
+    });
+    rowCallbacks.current = {
+      onSelectRow,
+      onRowMove,
+      onRowDragStart,
+      onRowDragEnd,
+    };
     const host = useRef<HTMLDivElement>(null);
     const runtime = useRef<ViewerRuntime | null>(null);
     const modelRef = useRef(model);
@@ -136,6 +177,9 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
     useImperativeHandle(
       ref,
       () => ({
+        frontView() {
+          runtime.current?.reset(new THREE.Vector3(0, 0, 1));
+        },
         resetView() {
           runtime.current?.reset();
         },
@@ -164,6 +208,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
           const previousMarker = current.marker.visible;
           current.scene.background = new THREE.Color("#f6f5f0");
           current.marker.visible = false;
+          current.rows.setHidden(true);
           current.renderer.render(current.scene, current.camera);
           const anchor = document.createElement("a");
           anchor.href = current.renderer.domElement.toDataURL("image/png");
@@ -171,6 +216,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
           anchor.click();
           current.scene.background = previousBackground;
           current.marker.visible = previousMarker;
+          current.rows.setHidden(false);
           current.renderer.render(current.scene, current.camera);
         },
       }),
@@ -267,8 +313,9 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
           : bounds;
       };
 
-      const reset = () => {
-        const direction = new THREE.Vector3(0.95, 0.36, 1.55).normalize();
+      const reset = (
+        direction = new THREE.Vector3(0.95, 0.36, 1.55).normalize(),
+      ) => {
         const frame = frameModelBounds(
           renderedBounds(),
           container.clientWidth,
@@ -299,7 +346,21 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         selectionScale: new THREE.Vector3(1, 1, 1),
         selectionRotation: new THREE.Quaternion(),
         reset,
+        rows: null! as RowManipulator,
       };
+      current.rows = new RowManipulator(
+        scene,
+        camera,
+        controls,
+        renderer.domElement,
+        {
+          select: (row) => rowCallbacks.current.onSelectRow(row),
+          start: () => rowCallbacks.current.onRowDragStart(),
+          change: (row, value) => rowCallbacks.current.onRowMove(row, value),
+          end: (cancel) => rowCallbacks.current.onRowDragEnd(cancel),
+        },
+        () => ({ mesh: current.nodes, points: current.activePoints }),
+      );
       runtime.current = current;
 
       let previousSize: { width: number; height: number } | null = null;
@@ -440,6 +501,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
             1,
           );
         }
+        current.rows.render();
         renderer.render(scene, camera);
         frame = requestAnimationFrame(animate);
       };
@@ -448,6 +510,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       return () => {
         cancelAnimationFrame(frame);
         observer.disconnect();
+        current.rows.dispose();
         controls.dispose();
         renderer.domElement.removeEventListener("pointerdown", pointerDown);
         renderer.domElement.removeEventListener("pointerup", pointerUp);
@@ -572,11 +635,22 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       );
       if (shadow) current.group.add(shadow);
 
-      if (lastModel.current !== model) {
+      if (lastModel.current !== baseModel) {
         current.reset();
-        lastModel.current = model;
+        lastModel.current = baseModel;
       }
-    }, [model, frames, visibleRounds, thickness, mode]);
+    }, [model, baseModel, frames, visibleRounds, thickness, mode]);
+
+    useEffect(() => {
+      setHover(null);
+      runtime.current?.rows.update(
+        model,
+        visibleRounds,
+        selectedRow,
+        rowOffsets,
+        moveRows,
+      );
+    }, [model, visibleRounds, selectedRow, rowOffsets, moveRows]);
 
     useEffect(() => {
       const current = runtime.current;

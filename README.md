@@ -28,10 +28,12 @@ npm run preview
 - Orbit, pan and zoom the 3D model. Click a stitch to inspect its round, position, type, source line and parent connections.
 - Switch between **Stitches** and **Structure**, adjust display stitch size, reset the camera or use fullscreen.
 - Scrub through rounds, step forward/back or play the construction sequence.
+- Enable **Move rows** (↕), grab a row line or the green vertical handle, and drag up/down. **Front view** provides a straight-on view. Use ↑/↓ to nudge (Shift for larger steps), Escape to cancel a drag, or Undo/Reset to restore positions. The numeric offset and Up/Down buttons provide another way to move a row.
+- Row adjustments change the preview geometry without rewriting stitch counts. They are saved locally and included in Loopform project JSON and rendered PNGs. Plain pattern text contains only crochet instructions. Rendering changed pattern text or loading another example starts with the new pattern’s shape.
 - Recognize stitch types by shape: round **SC** bubbles, elongated **HDC** beads, longer **DC** beads and the tallest **TR** beads. Beads align with their parent connections to follow the fabric's slope; two-parent stitches use the parents' midpoint. Tall stitch bodies extend down from their upper row anchor along the connection and are bounded by the space between rows. Chains and slip stitches are flattened; decreases are wide beads. The shape key shows the types in the visible rounds while yarn colors retain their pattern meaning.
 - Load the **Mushroom cap**, **Little sphere**, **Everyday basket** or **Stitch sampler** examples. The sampler uses one color to compare stitch shapes directly.
 - Import `.crochet` / `.txt` patterns or version-1 Loopform `.json` projects. Export pattern text, an editable project or a PNG of the current model view.
-- Pattern text and display thickness are saved in this browser's local storage when available. Export a file to keep a portable copy; browser storage is not a backup.
+- Pattern text, row adjustments and display thickness are saved in this browser's local storage when available. Export a file to keep a portable copy; browser storage is not a backup.
 
 ## Pattern format
 
@@ -87,6 +89,7 @@ Flat rows, turns, BLO/FLO, separate-component sewing, specialized hdc decreases 
 - `src/lib/stitchAppearance.ts` and `src/components/StitchLegend.tsx`: shared stitch-shape definitions and the visible-round shape key.
 - `src/lib/stitchFrame.ts`: parent-aligned bead rotations and rotated bounds.
 - `src/App.tsx`: workspace, rendering controls, playback, import/export and local persistence.
+- `src/components/RowManipulator.ts` and `src/lib/rowOffsets.ts`: vertical row dragging, selection, and shape offsets.
 - `src/styles.css`: workspace layout and styling.
 - `src/lib/*.test.ts`: parser and geometry regression checks.
 - `docs/research/`: source-linked research and screenshot analysis that informed the prototype.
