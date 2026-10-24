@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { PatternEditor } from "./components/PatternEditor";
 import { ModelViewer, type ViewerHandle } from "./components/ModelViewer";
+import { StitchLegend } from "./components/StitchLegend";
 import { buildGeometry } from "./lib/geometry";
 import { EXAMPLES, parsePattern, YARN_COLORS } from "./lib/pattern";
 
@@ -121,6 +122,16 @@ export default function App() {
   );
   const roundCount = compiled.rounds.length;
   const currentRound = Math.max(1, Math.min(visibleRounds, roundCount || 1));
+  const visibleStitchTypes = useMemo(
+    () => [
+      ...new Set(
+        compiled.stitches
+          .filter((stitch) => stitch.round <= currentRound)
+          .map((stitch) => stitch.type),
+      ),
+    ],
+    [compiled, currentRound],
+  );
   const dirty = compiledSource !== source;
   const selected =
     selectedStitch === null
@@ -678,6 +689,7 @@ export default function App() {
                 stitch
               </span>
             </div>
+            <StitchLegend types={visibleStitchTypes} />
             <div className="playback-bar">
               <button
                 className={`play-button ${playing ? "playing" : ""}`}
@@ -953,7 +965,10 @@ export default function App() {
                   The preview arranges stitches around a circular profile using
                   round counts, attachment locations and stitch heights. Half
                   double and taller stitches create more height than single
-                  crochet.
+                  crochet. Round bubbles mark single crochet; elongated beads
+                  mark half double, double and treble crochet in increasing
+                  lengths. The shape key identifies the stitches in view while
+                  yarn colors follow your pattern.
                 </p>
                 <p className="guide-note">
                   This first version is an approximate preview for patterns

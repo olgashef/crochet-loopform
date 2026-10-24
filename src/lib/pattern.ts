@@ -476,4 +476,17 @@ export const EXAMPLES: {
 11: 36 sc (36)
 12: 36 sc (36)`,
   },
+  {
+    id: "sampler",
+    name: "Stitch sampler",
+    description: "One yarn color. Four unmistakable stitch shapes.",
+    source: `# Stitch sampler
+# Compare round SC bubbles with taller HDC, DC and TR beads
+
+[teal]
+1: 12 sc in mc (12)
+2: 12 inc (24)
+3: [3 sc, 3 hdc, 3 dc, 3 tr] rep 2 times (24)
+4: 24 sc (24)`,
+  },
 ];

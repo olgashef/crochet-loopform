@@ -8,6 +8,8 @@ import {
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { ModelGeometry } from "../lib/geometry";
+import { getStitchAppearance } from "../lib/stitchAppearance";
+import { frameModelBounds } from "../lib/viewFraming";
 import "./ModelViewer.css";
 
 export interface ViewerHandle {
@@ -37,6 +39,7 @@ interface ViewerRuntime {
   nodes: THREE.InstancedMesh | null;
   activePoints: Point[];
   marker: THREE.Mesh;
+  selectionScale: THREE.Vector3;
   reset: () => void;
 }
 
@@ -106,12 +109,14 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
     const host = useRef<HTMLDivElement>(null);
     const runtime = useRef<ViewerRuntime | null>(null);
     const modelRef = useRef(model);
+    const displayRef = useRef({ mode, thickness });
     const selectCallback = useRef(onSelect);
     const lastModel = useRef<ModelGeometry | null>(null);
     const [failure, setFailure] = useState<string | null>(null);
     const [hover, setHover] = useState<HoveredPoint | null>(null);
 
     modelRef.current = model;
+    displayRef.current = { mode, thickness };
     selectCallback.current = onSelect;
 
     useImperativeHandle(
@@ -226,26 +231,44 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       marker.visible = false;
       scene.add(marker);
 
-      const reset = () => {
-        const currentModel = modelRef.current;
-        const maxExtent = currentModel
-          ? Math.max(
-              currentModel.bounds.width,
-              currentModel.bounds.height,
-              currentModel.bounds.depth,
-              2,
+      const renderedBounds = () => {
+        const bounds = new THREE.Box3();
+        const display = displayRef.current;
+        const radius =
+          (display.mode === "structure" ? 0.062 : 0.25) * display.thickness;
+        for (const point of modelRef.current?.points ?? []) {
+          const scale = getStitchAppearance(point.type).scale;
+          const center = new THREE.Vector3().fromArray(point.position);
+          const extent = new THREE.Vector3()
+            .fromArray(scale)
+            .multiplyScalar(radius);
+          bounds.expandByPoint(center.clone().sub(extent));
+          bounds.expandByPoint(center.add(extent));
+        }
+        return bounds.isEmpty()
+          ? new THREE.Box3(
+              new THREE.Vector3(-2, -2, -2),
+              new THREE.Vector3(2, 2, 2),
             )
-          : 8;
-        const aspectAdjustment = Math.max(1, 1.15 / camera.aspect);
-        const distance = maxExtent * 1.5 * aspectAdjustment;
-        controls.target.set(0, 0, 0);
-        camera.position.copy(
-          new THREE.Vector3(0.95, 0.36, 1.55)
-            .normalize()
-            .multiplyScalar(distance),
+          : bounds;
+      };
+
+      const reset = () => {
+        const direction = new THREE.Vector3(0.95, 0.36, 1.55).normalize();
+        const frame = frameModelBounds(
+          renderedBounds(),
+          container.clientWidth,
+          container.clientHeight,
+          direction,
+          camera.fov,
         );
-        camera.near = Math.max(distance / 1000, 0.01);
-        camera.far = Math.max(distance * 100, 1000);
+        controls.target.copy(frame.target);
+        camera.position
+          .copy(frame.target)
+          .addScaledVector(direction, frame.distance);
+        controls.maxDistance = Math.max(800, frame.distance * 4);
+        camera.near = Math.max(frame.distance / 1000, 0.01);
+        camera.far = Math.max(frame.distance * 100, 1000);
         camera.updateProjectionMatrix();
         controls.update();
       };
@@ -259,36 +282,52 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         nodes: null,
         activePoints: [],
         marker,
+        selectionScale: new THREE.Vector3(1, 1, 1),
         reset,
       };
       runtime.current = current;
 
-      let firstSize = true;
-      let previousAspectAdjustment = 1;
+      let previousSize: { width: number; height: number } | null = null;
       const resize = () => {
         const width = Math.max(container.clientWidth, 1);
         const height = Math.max(container.clientHeight, 1);
         renderer.setSize(width, height, false);
         camera.aspect = width / height;
         camera.updateProjectionMatrix();
-        const aspectAdjustment = Math.max(1, 1.15 / camera.aspect);
-        if (firstSize) {
+        if (!previousSize) {
           reset();
-          firstSize = false;
-          previousAspectAdjustment = aspectAdjustment;
         } else if (
-          Math.abs(Math.log(aspectAdjustment / previousAspectAdjustment)) > 0.02
+          previousSize.width !== width ||
+          previousSize.height !== height
         ) {
-          // Keep the user's orbit and pan, changing only distance when a narrow
-          // viewport needs more room to frame the same object.
+          // Compare fits at the user's current orbit. Carry their relative zoom
+          // and pan into the new viewport rather than resetting the camera.
+          const offset = camera.position.clone().sub(controls.target);
+          const direction = offset.clone().normalize();
+          const bounds = renderedBounds();
+          const oldFrame = frameModelBounds(
+            bounds,
+            previousSize.width,
+            previousSize.height,
+            direction,
+            camera.fov,
+          );
+          const newFrame = frameModelBounds(
+            bounds,
+            width,
+            height,
+            direction,
+            camera.fov,
+          );
+          controls.target.add(newFrame.target.clone().sub(oldFrame.target));
           camera.position
-            .sub(controls.target)
-            .multiplyScalar(aspectAdjustment / previousAspectAdjustment)
-            .add(controls.target);
-          previousAspectAdjustment = aspectAdjustment;
+            .copy(controls.target)
+            .add(offset.multiplyScalar(newFrame.distance / oldFrame.distance));
           controls.update();
         }
+        previousSize = { width, height };
       };
+
       const observer = new ResizeObserver(resize);
       observer.observe(container);
       resize();
@@ -338,8 +377,11 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
           round: point.round,
           index: point.index,
           type: point.type,
-          x: Math.min(event.clientX - rect.left + 14, rect.width - 175),
-          y: Math.max(event.clientY - rect.top - 56, 12),
+          x: Math.max(
+            8,
+            Math.min(event.clientX - rect.left + 14, rect.width - 210),
+          ),
+          y: Math.max(event.clientY - rect.top - 76, 12),
         });
       };
       const pointerLeave = () => {
@@ -355,6 +397,18 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       const animate = () => {
         controls.update();
         marker.quaternion.copy(camera.quaternion);
+        if (marker.visible) {
+          // Project the bead's dimensions onto the camera axes so the selection
+          // outline still encloses a tall stitch after orbiting above the model.
+          camera.updateMatrixWorld();
+          const matrix = camera.matrixWorld.elements;
+          const { x, y, z } = current.selectionScale;
+          marker.scale.set(
+            Math.hypot(x * matrix[0], y * matrix[1], z * matrix[2]),
+            Math.hypot(x * matrix[4], y * matrix[5], z * matrix[6]),
+            1,
+          );
+        }
         renderer.render(scene, camera);
         frame = requestAnimationFrame(animate);
       };
@@ -414,7 +468,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       const color = new THREE.Color();
       active.forEach((point, index) => {
         transform.position.fromArray(point.position);
-        transform.scale.setScalar(1);
+        transform.scale.fromArray(getStitchAppearance(point.type).scale);
         transform.rotation.set(0, 0, 0);
         transform.updateMatrix();
         nodes.setMatrixAt(index, transform.matrix);
@@ -472,7 +526,13 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       current.group.add(edges);
 
       const floor =
-        Math.min(...model.points.map((point) => point.position[1])) - 0.3;
+        Math.min(
+          ...model.points.map(
+            (point) =>
+              point.position[1] -
+              nodeRadius * getStitchAppearance(point.type).scale[1],
+          ),
+        ) - 0.05;
       const shadow = createShadow(
         model.bounds.width,
         model.bounds.depth,
@@ -495,9 +555,9 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       current.marker.visible = Boolean(point);
       if (point) {
         current.marker.position.fromArray(point.position);
-        current.marker.scale.setScalar(
-          thickness * (mode === "structure" ? 0.6 : 1),
-        );
+        current.selectionScale
+          .fromArray(getStitchAppearance(point.type).scale)
+          .multiplyScalar(thickness * (mode === "structure" ? 0.35 : 1));
       }
     }, [selectedStitch, visibleRounds, thickness, mode, model]);
 
@@ -525,7 +585,11 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
             <strong>
               Round {hover.round} <span>·</span> Stitch {hover.index + 1}
             </strong>
-            <span>{hover.type.toUpperCase()} · Click to inspect</span>
+            <span>
+              {getStitchAppearance(hover.type).label} ·{" "}
+              {getStitchAppearance(hover.type).abbreviation}
+            </span>
+            <span className="stitch-tooltip-action">Click to inspect</span>
           </div>
         )}
       </div>

@@ -7,7 +7,7 @@ export interface ModelPoint {
   round: number;
   index: number;
   color: string;
-  type: string;
+  type: StitchType;
   position: Position;
   parents: number[];
   previous: number | null;
