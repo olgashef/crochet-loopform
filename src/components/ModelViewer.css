@@ -1,0 +1,84 @@
+.model-viewer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 250px;
+  isolation: isolate;
+}
+
+.model-viewer > canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+  touch-action: none;
+  cursor: grab;
+}
+
+.model-viewer > canvas:active {
+  cursor: grabbing;
+}
+
+.model-viewer > canvas:focus-visible {
+  outline: 2px solid #779687;
+  outline-offset: -4px;
+}
+
+.stitch-tooltip {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 11px 13px;
+  color: #f8f7f1;
+  background: #263c32;
+  border: 1px solid #536b5e;
+  border-radius: 9px;
+  box-shadow: 0 5px 20px #24372b1a;
+  pointer-events: none;
+  white-space: nowrap;
+  font: 11px/1.3 inherit;
+}
+
+.stitch-tooltip strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.stitch-tooltip > span {
+  color: #c4d3c8;
+  font-size: 10px;
+}
+
+.stitch-tooltip strong span {
+  padding: 0 3px;
+  color: #a7b8ac;
+}
+
+.viewer-message {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  padding: 40px;
+  text-align: center;
+  color: #415248;
+  pointer-events: none;
+}
+
+.viewer-message strong {
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.viewer-message span {
+  max-width: 350px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #7e8981;
+}

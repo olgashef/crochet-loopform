@@ -1,0 +1,52 @@
+{
+  "source": "timhutton/crochet-simulator",
+  "commit": "b6e1ba1341f9258c7581ae1ebf02d5c56ff22c5b",
+  "scope": "Headless topology/finite-coordinate checks; not shape accuracy or Yarnify validation.",
+  "results": [
+    {
+      "rows": [
+        6,
+        6,
+        6
+      ],
+      "pattern": "(c)5sc-4(sc-5)12",
+      "commands": 18,
+      "vertices": 18,
+      "edges": 30,
+      "faces": 12,
+      "connected": true,
+      "finite": true
+    },
+    {
+      "rows": [
+        6,
+        12,
+        18
+      ],
+      "pattern": "(c)5sc-4sc-5(sc-6)2(sc-7)2(sc-8)2(sc-9)2(sc-10)2(sc-11)3(sc-12)3(sc-13)3(sc-14)3(sc-15)3(sc-16)3sc-17",
+      "commands": 36,
+      "vertices": 36,
+      "edges": 66,
+      "faces": 30,
+      "connected": true,
+      "finite": true
+    },
+    {
+      "rows": [
+        6,
+        12,
+        18,
+        18,
+        12,
+        6
+      ],
+      "pattern": "(c)5sc-4sc-5(sc-6)2(sc-7)2(sc-8)2(sc-9)2(sc-10)2(sc-11)3(sc-12)3(sc-13)3(sc-14)3(sc-15)3(sc-16)3(sc-17)21sc-17-16sc-16sc-16-15sc-15sc-15-14sc-14sc-14-13sc-13sc-13-12sc-12sc-11sc-11-10sc-10-9sc-9-8sc-8-7sc-7-6",
+      "commands": 72,
+      "vertices": 72,
+      "edges": 158,
+      "faces": 85,
+      "connected": true,
+      "finite": true
+    }
+  ]
+}

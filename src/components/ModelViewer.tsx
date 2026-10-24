@@ -1,0 +1,534 @@
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import type { ModelGeometry } from "../lib/geometry";
+import "./ModelViewer.css";
+
+export interface ViewerHandle {
+  resetView(): void;
+  zoomIn(): void;
+  zoomOut(): void;
+  exportImage(): void;
+}
+
+export interface ViewerProps {
+  model: ModelGeometry | null;
+  visibleRounds: number;
+  thickness: number;
+  mode: "stitches" | "structure";
+  selectedStitch: number | null;
+  onSelect: (id: number | null) => void;
+}
+
+type Point = ModelGeometry["points"][number];
+
+interface ViewerRuntime {
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  renderer: THREE.WebGLRenderer;
+  controls: OrbitControls;
+  group: THREE.Group;
+  nodes: THREE.InstancedMesh | null;
+  activePoints: Point[];
+  marker: THREE.Mesh;
+  reset: () => void;
+}
+
+interface HoveredPoint {
+  id: number;
+  round: number;
+  index: number;
+  type: string;
+  x: number;
+  y: number;
+}
+
+function disposeGroup(group: THREE.Object3D) {
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>();
+  group.traverse((object) => {
+    if (object instanceof THREE.Mesh) {
+      geometries.add(object.geometry);
+      for (const material of Array.isArray(object.material)
+        ? object.material
+        : [object.material]) {
+        materials.add(material);
+      }
+      if (object instanceof THREE.InstancedMesh) object.dispose();
+    }
+  });
+  for (const geometry of geometries) geometry.dispose();
+  for (const material of materials) {
+    if (material instanceof THREE.MeshBasicMaterial) material.map?.dispose();
+    material.dispose();
+  }
+}
+
+function createShadow(width: number, depth: number, floor: number) {
+  const image = document.createElement("canvas");
+  image.width = image.height = 128;
+  const context = image.getContext("2d");
+  if (!context) return null;
+  const gradient = context.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gradient.addColorStop(0, "rgba(63,55,43,0.17)");
+  gradient.addColorStop(0.55, "rgba(63,55,43,0.07)");
+  gradient.addColorStop(1, "rgba(63,55,43,0)");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 128, 128);
+  const texture = new THREE.CanvasTexture(image);
+  const shadow = new THREE.Mesh(
+    new THREE.PlaneGeometry(
+      Math.max(width, 1) * 1.35,
+      Math.max(depth, 1) * 1.35,
+    ),
+    new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      depthWrite: false,
+    }),
+  );
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.y = floor;
+  return shadow;
+}
+
+export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
+  function ModelViewer(
+    { model, visibleRounds, thickness, mode, selectedStitch, onSelect },
+    ref,
+  ) {
+    const host = useRef<HTMLDivElement>(null);
+    const runtime = useRef<ViewerRuntime | null>(null);
+    const modelRef = useRef(model);
+    const selectCallback = useRef(onSelect);
+    const lastModel = useRef<ModelGeometry | null>(null);
+    const [failure, setFailure] = useState<string | null>(null);
+    const [hover, setHover] = useState<HoveredPoint | null>(null);
+
+    modelRef.current = model;
+    selectCallback.current = onSelect;
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        resetView() {
+          runtime.current?.reset();
+        },
+        zoomIn() {
+          const current = runtime.current;
+          if (!current) return;
+          current.camera.position
+            .sub(current.controls.target)
+            .multiplyScalar(0.8)
+            .add(current.controls.target);
+          current.controls.update();
+        },
+        zoomOut() {
+          const current = runtime.current;
+          if (!current) return;
+          current.camera.position
+            .sub(current.controls.target)
+            .multiplyScalar(1.25)
+            .add(current.controls.target);
+          current.controls.update();
+        },
+        exportImage() {
+          const current = runtime.current;
+          if (!current) return;
+          const previousBackground = current.scene.background;
+          const previousMarker = current.marker.visible;
+          current.scene.background = new THREE.Color("#f6f5f0");
+          current.marker.visible = false;
+          current.renderer.render(current.scene, current.camera);
+          const anchor = document.createElement("a");
+          anchor.href = current.renderer.domElement.toDataURL("image/png");
+          anchor.download = "loopform-model.png";
+          anchor.click();
+          current.scene.background = previousBackground;
+          current.marker.visible = previousMarker;
+          current.renderer.render(current.scene, current.camera);
+        },
+      }),
+      [],
+    );
+
+    useEffect(() => {
+      const container = host.current;
+      if (!container) return;
+      let renderer: THREE.WebGLRenderer;
+      try {
+        renderer = new THREE.WebGLRenderer({
+          antialias: true,
+          alpha: true,
+          preserveDrawingBuffer: true,
+        });
+      } catch {
+        setFailure(
+          "The 3D view needs WebGL. Try enabling hardware acceleration or opening this page in another browser.",
+        );
+        return;
+      }
+
+      setFailure(null);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setClearColor(0x000000, 0);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1;
+      renderer.domElement.setAttribute(
+        "aria-label",
+        "Interactive crochet model. Drag to rotate, scroll to zoom, or click a stitch to inspect it.",
+      );
+      renderer.domElement.setAttribute("role", "img");
+      renderer.domElement.setAttribute("tabindex", "0");
+      container.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(36, 1, 0.05, 3000);
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.075;
+      controls.rotateSpeed = 0.65;
+      controls.zoomSpeed = 0.8;
+      controls.panSpeed = 0.7;
+      controls.screenSpacePanning = true;
+      controls.minDistance = 0.4;
+      controls.maxDistance = 800;
+      controls.maxPolarAngle = Math.PI * 0.91;
+
+      scene.add(new THREE.HemisphereLight(0xfffbef, 0xb7b2a6, 1.8));
+      const key = new THREE.DirectionalLight(0xfff2df, 2.5);
+      key.position.set(-10, 16, 10);
+      scene.add(key);
+      const fill = new THREE.DirectionalLight(0xe2eeff, 1.1);
+      fill.position.set(10, 5, -8);
+      scene.add(fill);
+
+      const group = new THREE.Group();
+      scene.add(group);
+      const marker = new THREE.Mesh(
+        new THREE.RingGeometry(0.31, 0.35, 48),
+        new THREE.MeshBasicMaterial({
+          color: "#315d4c",
+          side: THREE.DoubleSide,
+          depthTest: false,
+          transparent: true,
+          opacity: 0.95,
+        }),
+      );
+      marker.renderOrder = 10;
+      marker.visible = false;
+      scene.add(marker);
+
+      const reset = () => {
+        const currentModel = modelRef.current;
+        const maxExtent = currentModel
+          ? Math.max(
+              currentModel.bounds.width,
+              currentModel.bounds.height,
+              currentModel.bounds.depth,
+              2,
+            )
+          : 8;
+        const aspectAdjustment = Math.max(1, 1.15 / camera.aspect);
+        const distance = maxExtent * 1.5 * aspectAdjustment;
+        controls.target.set(0, 0, 0);
+        camera.position.copy(
+          new THREE.Vector3(0.95, 0.36, 1.55)
+            .normalize()
+            .multiplyScalar(distance),
+        );
+        camera.near = Math.max(distance / 1000, 0.01);
+        camera.far = Math.max(distance * 100, 1000);
+        camera.updateProjectionMatrix();
+        controls.update();
+      };
+
+      const current: ViewerRuntime = {
+        scene,
+        camera,
+        renderer,
+        controls,
+        group,
+        nodes: null,
+        activePoints: [],
+        marker,
+        reset,
+      };
+      runtime.current = current;
+
+      let firstSize = true;
+      let previousAspectAdjustment = 1;
+      const resize = () => {
+        const width = Math.max(container.clientWidth, 1);
+        const height = Math.max(container.clientHeight, 1);
+        renderer.setSize(width, height, false);
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        const aspectAdjustment = Math.max(1, 1.15 / camera.aspect);
+        if (firstSize) {
+          reset();
+          firstSize = false;
+          previousAspectAdjustment = aspectAdjustment;
+        } else if (
+          Math.abs(Math.log(aspectAdjustment / previousAspectAdjustment)) > 0.02
+        ) {
+          // Keep the user's orbit and pan, changing only distance when a narrow
+          // viewport needs more room to frame the same object.
+          camera.position
+            .sub(controls.target)
+            .multiplyScalar(aspectAdjustment / previousAspectAdjustment)
+            .add(controls.target);
+          previousAspectAdjustment = aspectAdjustment;
+          controls.update();
+        }
+      };
+      const observer = new ResizeObserver(resize);
+      observer.observe(container);
+      resize();
+
+      const raycaster = new THREE.Raycaster();
+      const pointer = new THREE.Vector2();
+      const hitTest = (event: PointerEvent) => {
+        if (!current.nodes) return null;
+        const rect = renderer.domElement.getBoundingClientRect();
+        pointer.set(
+          ((event.clientX - rect.left) / rect.width) * 2 - 1,
+          -((event.clientY - rect.top) / rect.height) * 2 + 1,
+        );
+        raycaster.setFromCamera(pointer, camera);
+        const hit = raycaster.intersectObject(current.nodes, false)[0];
+        return hit?.instanceId === undefined
+          ? null
+          : current.activePoints[hit.instanceId];
+      };
+
+      let down: [number, number] | null = null;
+      const pointerDown = (event: PointerEvent) => {
+        if (event.button === 0) down = [event.clientX, event.clientY];
+        setHover(null);
+      };
+      const pointerUp = (event: PointerEvent) => {
+        if (
+          event.button === 0 &&
+          down &&
+          Math.hypot(event.clientX - down[0], event.clientY - down[1]) < 5
+        ) {
+          selectCallback.current(hitTest(event)?.id ?? null);
+        }
+        down = null;
+      };
+      const pointerMove = (event: PointerEvent) => {
+        if (event.buttons) return;
+        const point = hitTest(event);
+        renderer.domElement.style.cursor = point ? "pointer" : "grab";
+        if (!point) {
+          setHover(null);
+          return;
+        }
+        const rect = container.getBoundingClientRect();
+        setHover({
+          id: point.id,
+          round: point.round,
+          index: point.index,
+          type: point.type,
+          x: Math.min(event.clientX - rect.left + 14, rect.width - 175),
+          y: Math.max(event.clientY - rect.top - 56, 12),
+        });
+      };
+      const pointerLeave = () => {
+        setHover(null);
+        down = null;
+      };
+      renderer.domElement.addEventListener("pointerdown", pointerDown);
+      renderer.domElement.addEventListener("pointerup", pointerUp);
+      renderer.domElement.addEventListener("pointermove", pointerMove);
+      renderer.domElement.addEventListener("pointerleave", pointerLeave);
+
+      let frame = 0;
+      const animate = () => {
+        controls.update();
+        marker.quaternion.copy(camera.quaternion);
+        renderer.render(scene, camera);
+        frame = requestAnimationFrame(animate);
+      };
+      animate();
+
+      return () => {
+        cancelAnimationFrame(frame);
+        observer.disconnect();
+        controls.dispose();
+        renderer.domElement.removeEventListener("pointerdown", pointerDown);
+        renderer.domElement.removeEventListener("pointerup", pointerUp);
+        renderer.domElement.removeEventListener("pointermove", pointerMove);
+        renderer.domElement.removeEventListener("pointerleave", pointerLeave);
+        disposeGroup(group);
+        marker.geometry.dispose();
+        (marker.material as THREE.Material).dispose();
+        renderer.dispose();
+        renderer.forceContextLoss();
+        renderer.domElement.remove();
+        if (runtime.current === current) runtime.current = null;
+        lastModel.current = null;
+      };
+    }, []);
+
+    useEffect(() => {
+      const current = runtime.current;
+      if (!current) return;
+      disposeGroup(current.group);
+      current.group.clear();
+      current.nodes = null;
+      current.activePoints = [];
+      current.marker.visible = false;
+      setHover(null);
+      if (!model || model.points.length === 0) return;
+
+      const active = model.points.filter(
+        (point) => point.round <= visibleRounds,
+      );
+      const pointMap = new Map(active.map((point) => [point.id, point]));
+      current.activePoints = active;
+      const nodeRadius = (mode === "structure" ? 0.062 : 0.25) * thickness;
+      const sphere = new THREE.SphereGeometry(
+        nodeRadius,
+        mode === "structure" ? 8 : 16,
+        mode === "structure" ? 6 : 12,
+      );
+      const nodeMaterial = new THREE.MeshStandardMaterial({
+        roughness: 0.57,
+        metalness: 0.025,
+      });
+      const nodes = new THREE.InstancedMesh(
+        sphere,
+        nodeMaterial,
+        active.length,
+      );
+      const transform = new THREE.Object3D();
+      const color = new THREE.Color();
+      active.forEach((point, index) => {
+        transform.position.fromArray(point.position);
+        transform.scale.setScalar(1);
+        transform.rotation.set(0, 0, 0);
+        transform.updateMatrix();
+        nodes.setMatrixAt(index, transform.matrix);
+        nodes.setColorAt(index, color.set(point.color));
+      });
+      nodes.instanceMatrix.needsUpdate = true;
+      if (nodes.instanceColor) nodes.instanceColor.needsUpdate = true;
+      nodes.computeBoundingSphere();
+      current.nodes = nodes;
+      current.group.add(nodes);
+
+      const links = model.links.filter(
+        (link) => pointMap.has(link.from) && pointMap.has(link.to),
+      );
+      const edgeRadius = (mode === "structure" ? 0.018 : 0.045) * thickness;
+      const cylinder = new THREE.CylinderGeometry(
+        1,
+        1,
+        1,
+        mode === "structure" ? 5 : 8,
+      );
+      const edgeMaterial = new THREE.MeshStandardMaterial({
+        roughness: 0.8,
+        metalness: 0,
+      });
+      const edges = new THREE.InstancedMesh(
+        cylinder,
+        edgeMaterial,
+        links.length,
+      );
+      const start = new THREE.Vector3();
+      const end = new THREE.Vector3();
+      const direction = new THREE.Vector3();
+      const vertical = new THREE.Vector3(0, 1, 0);
+      links.forEach((link, index) => {
+        start.fromArray(pointMap.get(link.from)!.position);
+        end.fromArray(pointMap.get(link.to)!.position);
+        direction.subVectors(end, start);
+        transform.position.copy(start).add(end).multiplyScalar(0.5);
+        transform.quaternion.setFromUnitVectors(
+          vertical,
+          direction.clone().normalize(),
+        );
+        const radius = edgeRadius * (link.kind === "course" ? 1.15 : 0.88);
+        transform.scale.set(radius, direction.length(), radius);
+        transform.updateMatrix();
+        edges.setMatrixAt(index, transform.matrix);
+        color.set(link.color);
+        if (mode === "structure") color.lerp(new THREE.Color("#a9b4a8"), 0.35);
+        edges.setColorAt(index, color);
+      });
+      edges.instanceMatrix.needsUpdate = true;
+      if (edges.instanceColor) edges.instanceColor.needsUpdate = true;
+      edges.computeBoundingSphere();
+      current.group.add(edges);
+
+      const floor =
+        Math.min(...model.points.map((point) => point.position[1])) - 0.3;
+      const shadow = createShadow(
+        model.bounds.width,
+        model.bounds.depth,
+        floor,
+      );
+      if (shadow) current.group.add(shadow);
+
+      if (lastModel.current !== model) {
+        current.reset();
+        lastModel.current = model;
+      }
+    }, [model, visibleRounds, thickness, mode]);
+
+    useEffect(() => {
+      const current = runtime.current;
+      if (!current) return;
+      const point = current.activePoints.find(
+        (candidate) => candidate.id === selectedStitch,
+      );
+      current.marker.visible = Boolean(point);
+      if (point) {
+        current.marker.position.fromArray(point.position);
+        current.marker.scale.setScalar(
+          thickness * (mode === "structure" ? 0.6 : 1),
+        );
+      }
+    }, [selectedStitch, visibleRounds, thickness, mode, model]);
+
+    return (
+      <div className="model-viewer" ref={host}>
+        {failure && (
+          <div className="viewer-message" role="alert">
+            <strong>3D view unavailable</strong>
+            <span>{failure}</span>
+          </div>
+        )}
+        {!failure && (!model || !model.points.length) && (
+          <div className="viewer-message">
+            <strong>Your next idea starts here</strong>
+            <span>
+              Write a pattern and render it to see your stitches take shape.
+            </span>
+          </div>
+        )}
+        {hover && !failure && (
+          <div
+            className="stitch-tooltip"
+            style={{ left: hover.x, top: hover.y }}
+          >
+            <strong>
+              Round {hover.round} <span>·</span> Stitch {hover.index + 1}
+            </strong>
+            <span>{hover.type.toUpperCase()} · Click to inspect</span>
+          </div>
+        )}
+      </div>
+    );
+  },
+);
