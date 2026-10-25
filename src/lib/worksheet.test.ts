@@ -7,6 +7,7 @@ import {
   readRoundLine,
 } from "./pattern";
 import {
+  csvPattern,
   deleteWorksheetRow,
   editWorksheetRow,
   insertWorksheetRow,
@@ -15,6 +16,23 @@ import {
   writtenPattern,
 } from "./worksheet";
 const sample = EXAMPLES.find((e) => e.id === "seven")!.source;
+test("CSV export preserves yarn, comments and ranges with freshly calculated totals", () => {
+  const csv = csvPattern('# My "hat", small\n[red]\nRnd 1: 7 sc in mr (999)\nRnd 2–4: 7 sc // soft, warm\n[beige]\nRnd 5: [sc, inc] × 3, sc');
+  assert.equal(csv, '\uFEFF"Round","Instructions","Total","Yarn","Notes"\r\n' +
+    '"","","","","My ""hat"", small"\r\n' +
+    '"","","","red",""\r\n' +
+    '"Rnd 1","7 sc in mr","7","red",""\r\n' +
+    '"Rnd 2–4","7 sc for 3 rounds","7","red","soft, warm"\r\n' +
+    '"","","","beige",""\r\n' +
+    '"Rnd 5","[sc, inc] × 3, sc","10","beige",""\r\n');
+});
+test("CSV export keeps unfinished edits without totals and escapes spreadsheet formulas", () => {
+  const csv = csvPattern('# =HYPERLINK("example")\nRnd 1: unfinished\nRnd 2: 7 sc');
+  assert.ok(csv.includes('"\'=HYPERLINK(""example"")"'));
+  assert.ok(csv.includes('"Rnd 1","unfinished","","",""'));
+  assert.ok(csv.includes('"Rnd 2","7 sc","7","",""'));
+  assert.equal(csvPattern(''), '\uFEFF"Round","Instructions","Total","Yarn","Notes"\r\n');
+});
 test("printed Rnd notation expands the 16-round sample into correctly counted stitches and original source locations", () => {
   const parsed = parsePattern(sample);
   assert.deepEqual(parsed.diagnostics, []);

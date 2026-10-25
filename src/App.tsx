@@ -30,7 +30,7 @@ import {
   X,
 } from "lucide-react";
 import { PatternWorksheet } from "./components/PatternWorksheet";
-import { writtenPattern } from "./lib/worksheet";
+import { csvPattern, writtenPattern } from "./lib/worksheet";
 import { PatternEditor } from "./components/PatternEditor";
 import { ModelViewer, type ViewerHandle } from "./components/ModelViewer";
 import { StitchLegend } from "./components/StitchLegend";
@@ -482,6 +482,18 @@ export default function App() {
                   <span>
                     Pattern text
                     <small>Written rounds with automatic totals</small>
+                  </span>
+                </button>
+                <button
+                  onClick={() => {
+                    saveFile(`${filename}.csv`, csvPattern(source), "text/csv;charset=utf-8");
+                    setMenu(null);
+                  }}
+                >
+                  <FileText size={17} />
+                  <span>
+                    Pattern CSV
+                    <small>Rounds, instructions, totals and yarn for spreadsheets</small>
                   </span>
                 </button>
                 <button

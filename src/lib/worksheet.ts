@@ -104,3 +104,50 @@ export function writtenPattern(source: string) {
     })
     .join("\n");
 }
+
+/** Spreadsheet export keeps grouped rounds and calculates totals per round. */
+export function csvPattern(source: string) {
+  const rows: (string | number)[][] = [
+    ["Round", "Instructions", "Total", "Yarn", "Notes"],
+  ];
+  let yarn = "";
+  for (const line of source.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const color = /^\s*\[([^\]]+)\]\s*$/.exec(line);
+    if (color) {
+      yarn = color[1];
+      rows.push(["", "", "", yarn, ""]);
+      continue;
+    }
+    const row = readRoundLine(line);
+    if (!row) {
+      rows.push(["", "", "", "", line.replace(/^\s*(?:#+|\/\/)\s*/, "")]);
+      continue;
+    }
+    const body = worksheetInstruction(line);
+    const [instruction, ...comments] = body.split("//");
+    let total: number | string = "";
+    let end = row.end ?? row.start;
+    try {
+      const summary = analyzeInstruction(body);
+      total = summary.outputCount;
+      end = row.start + (summary.repeatRounds ?? 1) - 1;
+    } catch {
+      // Keep unfinished instructions without inventing a stitch total.
+    }
+    rows.push([
+      `Rnd ${row.start}${end > row.start ? "–" + end : ""}`,
+      instruction.trim(),
+      total,
+      yarn,
+      comments.join("//").trim(),
+    ]);
+  }
+  // Quote every field, escape quotes, and neutralize spreadsheet formulas.
+  const cell = (value: string | number) => {
+    const text = String(value);
+    const safe = /^[\s]*[=+@-]/.test(text) ? "'" + text : text;
+    return `"${safe.replaceAll('"', '""')}"`;
+  };
+  return "\uFEFF" + rows.map((row) => row.map(cell).join(",")).join("\r\n") + "\r\n";
+}

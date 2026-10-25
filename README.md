@@ -36,6 +36,7 @@ npm run preview
 - Recognize stitch types by shape: round **SC** bubbles, elongated **HDC** beads, longer **DC** beads and the tallest **TR** beads. Beads align with their parent connections to follow the fabric's slope; two-parent stitches use the parents' midpoint. Tall stitch bodies extend down from their upper row anchor along the connection and are bounded by the space between rows. Chains and slip stitches are flattened; decreases are wide beads. The shape key shows the types in the visible rounds while yarn colors retain their pattern meaning.
 - Load the **Mushroom cap**, **Little sphere**, **Everyday basket** **Stitch sampler** or **Seven-stitch shaping** examples. The sampler uses one color to compare stitch shapes directly.
 - Import `.crochet` / `.txt` patterns or version-1 Loopform `.json` projects. Export pattern text, an editable project or a PNG of the current model view.
+- Choose **Export → Pattern CSV** for a spreadsheet with round labels, instructions, calculated stitch totals per round, yarn colors and notes. Grouped rounds remain grouped; unfinished instructions have a blank total. CSV export uses the current editor contents.
 - Pattern text, row adjustments and display thickness are saved in this browser's local storage when available. Export a file to keep a portable copy; browser storage is not a backup.
 
 ## Pattern format
