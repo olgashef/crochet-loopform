@@ -97,7 +97,7 @@ function tokenize(source: string): Token[] {
       position += whitespace[0].length;
       continue;
     }
-    const token = /^(?:\d+|[a-z]+|[\[\],*])/i.exec(rest);
+    const token = /^(?:\d+|[a-z]+|[\[\],*×])/i.exec(rest);
     if (!token) {
       throw new PatternSyntaxError(
         `Unexpected “${rest[0]}” near column ${position + 1}. Use stitches such as sc, inc, dec or [sc, inc] rep 6 times.`,
@@ -158,7 +158,9 @@ function parseOperations(source: string): Operation[] {
         if (!group.length)
           throw new PatternSyntaxError("A repeat group cannot be empty.");
         let repetitions = 1;
-        if (["rep", "repeat", "x", "*"].includes(tokens[cursor]?.value ?? "")) {
+        if (
+          ["rep", "repeat", "x", "*", "×"].includes(tokens[cursor]?.value ?? "")
+        ) {
           cursor++;
           repetitions = readCount();
           if (["time", "times"].includes(tokens[cursor]?.value ?? "")) cursor++;
@@ -205,6 +207,61 @@ function parseOperations(source: string): Operation[] {
   if (!operations.length)
     throw new PatternSyntaxError("This round has no stitches yet.");
   return operations;
+}
+
+export interface RoundLine {
+  start: number;
+  end: number | null;
+  instruction: string;
+}
+/** Accept code notation and the compact printed Rnd 9–16 notation. */
+export function readRoundLine(line: string): RoundLine | null {
+  const match =
+    /^(?:(?:rnd|round|r)\.?\s*)?(\d+)(?:\s*[-–—]\s*(\d+))?(?:\s*:\s*|\s+)(.*)$/i.exec(
+      line.trimStart(),
+    );
+  return match
+    ? {
+        start: Number(match[1]),
+        end: match[2] ? Number(match[2]) : null,
+        instruction: match[3],
+      }
+    : null;
+}
+
+export function analyzeInstruction(text: string) {
+  let instruction = text.split("//")[0].trim();
+  const declaredMatch = /\s*\((\d+)\)\s*$/.exec(instruction);
+  const declaredCount = declaredMatch ? Number(declaredMatch[1]) : null;
+  if (declaredMatch)
+    instruction = instruction.slice(0, declaredMatch.index).trim();
+  const duration = /\s+for\s+(\d+)\s+(?:rounds?|rnds?)\s*$/i.exec(instruction);
+  const repeatRounds = duration ? Number(duration[1]) : null;
+  if (
+    repeatRounds !== null &&
+    (!Number.isSafeInteger(repeatRounds) ||
+      repeatRounds < 1 ||
+      repeatRounds > MAX_ROUNDS)
+  )
+    throw new PatternSyntaxError(`Use between 1 and ${MAX_ROUNDS} rounds.`);
+  if (duration) instruction = instruction.slice(0, duration.index).trim();
+  const foundation = /\s+in\s+(?:mc|mr|magic\s+ring)\s*$/i.test(instruction);
+  if (foundation)
+    instruction = instruction
+      .replace(/\s+in\s+(?:mc|mr|magic\s+ring)\s*$/i, "")
+      .trim();
+  const operations = parseOperations(instruction);
+  return {
+    operations,
+    foundation,
+    declaredCount,
+    repeatRounds,
+    inputCount: operations.reduce(
+      (n, op) => n + (op === "ch" ? 0 : op === "dec" ? 2 : 1),
+      0,
+    ),
+    outputCount: operations.reduce((n, op) => n + (op === "inc" ? 2 : 1), 0),
+  };
 }
 
 /**
@@ -266,118 +323,132 @@ export function parsePattern(source: string): ParsedPattern {
         continue;
       }
 
-      const roundMatch = /^(?:(?:r(?:ound)?\.?)\s*)?(\d+)\s*:\s*(.*)$/i.exec(
-        line,
-      );
-      if (!roundMatch)
+      const roundLine = readRoundLine(line);
+      if (!roundLine)
         throw new PatternSyntaxError(
-          "Start each round with its number, for example 1: 6 sc in mc (6).",
+          "Start each round with its number, for example Rnd 1: 7 sc in mr.",
         );
-      const roundNumber = Number(roundMatch[1]);
-      if (parsed.rounds.length >= MAX_ROUNDS || roundNumber > MAX_ROUNDS)
-        throw new PatternSyntaxError(
-          `This preview supports up to ${MAX_ROUNDS} rounds.`,
-        );
-      if (roundNumber !== parsed.rounds.length + 1)
-        throw new PatternSyntaxError(
-          `Expected round ${parsed.rounds.length + 1}, but found round ${roundNumber}. Keep round numbers consecutive, starting at 1.`,
-        );
-
-      let instruction = roundMatch[2].trim();
-      const declaredMatch = /\s*\((\d+)\)\s*$/.exec(instruction);
-      const declaredCount = declaredMatch ? Number(declaredMatch[1]) : null;
-      if (declaredMatch)
-        instruction = instruction.slice(0, declaredMatch.index).trim();
-      const foundation = /\s+in\s+(?:mc|mr|magic\s+ring)\s*$/i.test(
-        instruction,
-      );
-      if (foundation)
-        instruction = instruction
-          .replace(/\s+in\s+(?:mc|mr|magic\s+ring)\s*$/i, "")
-          .trim();
-      if (foundation && roundNumber !== 1)
-        throw new PatternSyntaxError(
-          "A magic ring can only start round 1. Start another component as a separate pattern.",
-        );
-      const operations = parseOperations(instruction);
+      const { operations, foundation, declaredCount, repeatRounds } =
+        analyzeInstruction(roundLine.instruction);
+      const endRound =
+        roundLine.end ?? roundLine.start + (repeatRounds ?? 1) - 1;
       if (
-        roundNumber === 1 &&
-        operations.some((op) => op === "inc" || op === "dec")
+        !Number.isSafeInteger(endRound) ||
+        roundLine.start < 1 ||
+        endRound < roundLine.start ||
+        endRound > MAX_ROUNDS
       )
         throw new PatternSyntaxError(
-          "Start with foundation stitches, for example 1: 6 sc in mc (6). Increases and decreases need an existing round.",
+          `Use consecutive round ranges between 1 and ${MAX_ROUNDS}.`,
         );
+      if (
+        roundLine.end !== null &&
+        repeatRounds !== null &&
+        endRound - roundLine.start + 1 !== repeatRounds
+      )
+        throw new PatternSyntaxError(
+          `The range Rnd ${roundLine.start}–${endRound} contains ${endRound - roundLine.start + 1} rounds, but the instruction says ${repeatRounds}.`,
+        );
+      for (
+        let roundNumber = roundLine.start;
+        roundNumber <= endRound;
+        roundNumber++
+      ) {
+        if (parsed.rounds.length >= MAX_ROUNDS || roundNumber > MAX_ROUNDS)
+          throw new PatternSyntaxError(
+            `This preview supports up to ${MAX_ROUNDS} rounds.`,
+          );
+        if (roundNumber !== parsed.rounds.length + 1)
+          throw new PatternSyntaxError(
+            `Expected round ${parsed.rounds.length + 1}, but found round ${roundNumber}. Keep round numbers consecutive, starting at 1.`,
+          );
+        if (foundation && roundNumber !== 1)
+          throw new PatternSyntaxError(
+            "A magic ring can only start round 1. Start another component as a separate pattern.",
+          );
+        if (
+          roundNumber === 1 &&
+          operations.some((op) => op === "inc" || op === "dec")
+        )
+          throw new PatternSyntaxError(
+            "Start with foundation stitches, for example 1: 6 sc in mc (6). Increases and decreases need an existing round.",
+          );
 
-      let consumed = 0;
-      let produced = 0;
-      let increases = 0;
-      let decreases = 0;
-      for (const operation of operations) {
-        consumed += operation === "ch" ? 0 : operation === "dec" ? 2 : 1;
-        produced += operation === "inc" ? 2 : 1;
-        if (operation === "inc") increases++;
-        if (operation === "dec") decreases++;
-      }
-      if (parsed.stitches.length + produced > MAX_STITCHES)
-        throw new PatternSyntaxError(
-          `This preview supports up to ${MAX_STITCHES.toLocaleString()} stitches. Try a smaller pattern.`,
-        );
-      if (declaredCount !== null && declaredCount !== produced)
-        throw new PatternSyntaxError(
-          `Round ${roundNumber} makes ${produced} stitches, but its total says (${declaredCount}). Update the instructions or the total.`,
-        );
-      const parentRound = parsed.rounds.at(-1);
-      if (parentRound && consumed !== parentRound.outputCount) {
-        throw new PatternSyntaxError(
-          `Round ${roundNumber} uses ${consumed} stitches, but round ${parentRound.number} has ${parentRound.outputCount}. ${consumed > parentRound.outputCount ? "Remove extra stitches or decreases" : "Add stitches or increases"} so the full previous round is used.`,
-        );
-      }
-
-      const round: PatternRound = {
-        number: roundNumber,
-        color,
-        stitches: [],
-        inputCount: parentRound ? consumed : 0,
-        outputCount: produced,
-        declaredCount,
-        increases,
-        decreases,
-        line: lineNumber,
-      };
-      let parentCursor = 0;
-      const firstID = parsed.stitches.length;
-      for (const operation of operations) {
-        const needed =
-          !parentRound || operation === "ch" ? 0 : operation === "dec" ? 2 : 1;
-        const parents =
-          parentRound?.stitches
-            .slice(parentCursor, parentCursor + needed)
-            .map((stitch) => stitch.id) ?? [];
-        parentCursor += needed;
-        for (let child = 0; child < (operation === "inc" ? 2 : 1); child++) {
-          const id = firstID + round.stitches.length;
-          round.stitches.push({
-            id,
-            round: roundNumber,
-            index: round.stitches.length,
-            type: operation === "inc" ? "sc" : operation,
-            color,
-            parents: [...parents],
-            previous: id ? id - 1 : null,
-            sourceLine: lineNumber,
-            isIncrease: operation === "inc",
-          });
+        let consumed = 0;
+        let produced = 0;
+        let increases = 0;
+        let decreases = 0;
+        for (const operation of operations) {
+          consumed += operation === "ch" ? 0 : operation === "dec" ? 2 : 1;
+          produced += operation === "inc" ? 2 : 1;
+          if (operation === "inc") increases++;
+          if (operation === "dec") decreases++;
         }
-      }
-      parsed.rounds.push(round);
-      parsed.stitches.push(...round.stitches);
-      if (roundNumber === 1 && !foundation)
-        parsed.diagnostics.push({
+        if (parsed.stitches.length + produced > MAX_STITCHES)
+          throw new PatternSyntaxError(
+            `This preview supports up to ${MAX_STITCHES.toLocaleString()} stitches. Try a smaller pattern.`,
+          );
+        if (declaredCount !== null && declaredCount !== produced)
+          throw new PatternSyntaxError(
+            `Round ${roundNumber} makes ${produced} stitches, but its total says (${declaredCount}). Update the instructions or the total.`,
+          );
+        const parentRound = parsed.rounds.at(-1);
+        if (parentRound && consumed !== parentRound.outputCount) {
+          throw new PatternSyntaxError(
+            `Round ${roundNumber} uses ${consumed} stitches, but round ${parentRound.number} has ${parentRound.outputCount}. ${consumed > parentRound.outputCount ? "Remove extra stitches or decreases" : "Add stitches or increases"} so the full previous round is used.`,
+          );
+        }
+
+        const round: PatternRound = {
+          number: roundNumber,
+          color,
+          stitches: [],
+          inputCount: parentRound ? consumed : 0,
+          outputCount: produced,
+          declaredCount,
+          increases,
+          decreases,
           line: lineNumber,
-          severity: "warning",
-          message:
-            "Previewing the first round as a ring. Add “in mc” to make the magic-ring foundation explicit.",
-        });
+        };
+        let parentCursor = 0;
+        const firstID = parsed.stitches.length;
+        for (const operation of operations) {
+          const needed =
+            !parentRound || operation === "ch"
+              ? 0
+              : operation === "dec"
+                ? 2
+                : 1;
+          const parents =
+            parentRound?.stitches
+              .slice(parentCursor, parentCursor + needed)
+              .map((stitch) => stitch.id) ?? [];
+          parentCursor += needed;
+          for (let child = 0; child < (operation === "inc" ? 2 : 1); child++) {
+            const id = firstID + round.stitches.length;
+            round.stitches.push({
+              id,
+              round: roundNumber,
+              index: round.stitches.length,
+              type: operation === "inc" ? "sc" : operation,
+              color,
+              parents: [...parents],
+              previous: id ? id - 1 : null,
+              sourceLine: lineNumber,
+              isIncrease: operation === "inc",
+            });
+          }
+        }
+        parsed.rounds.push(round);
+        parsed.stitches.push(...round.stitches);
+        if (roundNumber === 1 && !foundation)
+          parsed.diagnostics.push({
+            line: lineNumber,
+            severity: "warning",
+            message:
+              "Previewing the first round as a ring. Add “in mc” to make the magic-ring foundation explicit.",
+          });
+      }
     } catch (error) {
       parsed.diagnostics.push({
         line: lineNumber,
@@ -488,5 +559,22 @@ export const EXAMPLES: {
 2: 12 inc (24)
 3: [3 sc, 3 hdc, 3 dc, 3 tr] rep 2 times (24)
 4: 24 sc (24)`,
+  },
+  {
+    id: "seven",
+    name: "Seven-stitch shaping",
+    description: "Worksheet notation, grouped rounds and automatic totals.",
+    source: `# Seven-stitch shaping
+[sage]
+Rnd 1: 7 sc in mr
+Rnd 2: 7 inc
+Rnd 3: [sc, inc] × 7
+Rnd 4: [2 sc, inc] × 7
+Rnd 5: sc, inc, [3 sc, inc] × 6, 2 sc
+Rnd 6: [4 sc, inc] × 7
+Rnd 7: 42 sc
+// An initial inc in Rnd 8 makes the intended 49 stitches.
+Rnd 8: 2 sc, inc, [5 sc, inc] × 6, 3 sc
+Rnd 9–16: 49 sc for 8 rounds`,
   },
 ];

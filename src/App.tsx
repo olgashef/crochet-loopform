@@ -29,6 +29,8 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
+import { PatternWorksheet } from "./components/PatternWorksheet";
+import { writtenPattern } from "./lib/worksheet";
 import { PatternEditor } from "./components/PatternEditor";
 import { ModelViewer, type ViewerHandle } from "./components/ModelViewer";
 import { StitchLegend } from "./components/StitchLegend";
@@ -87,6 +89,7 @@ function readWorkspace(): {
   compiledSource: string;
   thickness: number;
   rowOffsets: RowOffsets;
+  editorMode: "worksheet" | "code";
 } {
   try {
     const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
@@ -103,6 +106,7 @@ function readWorkspace(): {
         : candidate;
       return {
         source: value.source,
+        editorMode: value.editorMode === "code" ? "code" : "worksheet",
         compiledSource,
         rowOffsets:
           compiledSource === candidate
@@ -121,6 +125,7 @@ function readWorkspace(): {
     compiledSource: EXAMPLES[0].source,
     thickness: 1,
     rowOffsets: {},
+    editorMode: "worksheet",
   };
 }
 
@@ -186,6 +191,12 @@ export default function App() {
     moveRow(row, value);
     endRowMove();
   }
+  const [worksheetEditingLine, setWorksheetEditingLine] = useState<
+    number | null
+  >(null);
+  const [editorMode, setEditorMode] = useState<"worksheet" | "code">(
+    initial.editorMode,
+  );
   const [source, setSource] = useState(initial.source);
   const [compiledSource, setCompiledSource] = useState(initial.compiledSource);
   const [thickness, setThickness] = useState(initial.thickness);
@@ -212,6 +223,10 @@ export default function App() {
   const errors = draft.diagnostics.filter(
     (diagnostic) => diagnostic.severity === "error",
   );
+  const pendingWorksheet =
+    editorMode === "worksheet" &&
+    errors.length > 0 &&
+    errors[0].line === worksheetEditingLine;
   const warning = draft.diagnostics.find(
     (diagnostic) => diagnostic.severity === "warning",
   );
@@ -281,13 +296,14 @@ export default function App() {
           compiledSource,
           thickness,
           rowOffsets,
+          editorMode,
         }),
       );
       setSaveState("saved");
     } catch {
       setSaveState("unavailable");
     }
-  }, [source, compiledSource, thickness, rowOffsets]);
+  }, [source, compiledSource, thickness, rowOffsets, editorMode]);
 
   useEffect(() => {
     if (!playing) return;
@@ -363,6 +379,7 @@ export default function App() {
   }, [moveRows, selectedRow, undoRowMove, startRowMove, moveRow, endRowMove]);
 
   function loadSource(value: string) {
+    setWorksheetEditingLine(null);
     if (value.length > 120_000) {
       setToast("This pattern is too large. Use at most 120,000 characters.");
       return;
@@ -453,13 +470,18 @@ export default function App() {
                 </span>
                 <button
                   onClick={() => {
-                    saveFile(`${filename}.crochet`, source, "text/plain");
+                    saveFile(
+                      `${filename}.crochet`,
+                      writtenPattern(source),
+                      "text/plain",
+                    );
                     setMenu(null);
                   }}
                 >
                   <FileText size={17} />
                   <span>
-                    Pattern text<small>Editable .crochet file</small>
+                    Pattern text
+                    <small>Written rounds with automatic totals</small>
                   </span>
                 </button>
                 <button
@@ -575,6 +597,31 @@ export default function App() {
                 <Braces size={17} />
                 <h2>Pattern editor</h2>
               </div>
+              <div
+                className="editor-format-toggle"
+                aria-label="Pattern editing format"
+              >
+                <button
+                  className={editorMode === "worksheet" ? "active" : ""}
+                  aria-pressed={editorMode === "worksheet"}
+                  onClick={() => {
+                    setWorksheetEditingLine(null);
+                    setEditorMode("worksheet");
+                  }}
+                >
+                  Worksheet
+                </button>
+                <button
+                  className={editorMode === "code" ? "active" : ""}
+                  aria-pressed={editorMode === "code"}
+                  onClick={() => {
+                    setWorksheetEditingLine(null);
+                    setEditorMode("code");
+                  }}
+                >
+                  Code
+                </button>
+              </div>
               <button
                 className="icon-button help-button"
                 aria-label="Open syntax guide"
@@ -591,25 +638,48 @@ export default function App() {
                 className={`file-dot ${dirty ? "dirty" : ""}`}
                 title={dirty ? "Unrendered changes" : "Up to date"}
               />
-              <span className="file-language">CROCHET</span>
+              <span className="file-language">
+                {editorMode === "worksheet" ? "AUTOMATIC COUNTS" : "CROCHET"}
+              </span>
             </div>
             <div className="editor-content">
-              <PatternEditor
-                value={source}
-                onChange={(value) => {
-                  setSource(value);
-                  setSelectedStitch(null);
-                }}
-                diagnostics={draft.diagnostics}
-                onRender={renderPattern}
-                selectedLine={!dirty ? (selected?.sourceLine ?? null) : null}
-              />
+              {editorMode === "worksheet" ? (
+                <PatternWorksheet
+                  onEditingChange={setWorksheetEditingLine}
+                  value={source}
+                  onChange={(value) => {
+                    setSource(value);
+                    setSelectedStitch(null);
+                  }}
+                  diagnostics={draft.diagnostics}
+                  onRender={renderPattern}
+                  selectedLine={!dirty ? (selected?.sourceLine ?? null) : null}
+                />
+              ) : (
+                <PatternEditor
+                  value={source}
+                  onChange={(value) => {
+                    setSource(value);
+                    setSelectedStitch(null);
+                  }}
+                  diagnostics={draft.diagnostics}
+                  onRender={renderPattern}
+                  selectedLine={!dirty ? (selected?.sourceLine ?? null) : null}
+                />
+              )}
             </div>
             <div
-              className={`validation-strip ${errors.length ? "has-error" : warning && draft.rounds.length ? "has-warning" : ""}`}
+              className={`validation-strip ${errors.length && !pendingWorksheet ? "has-error" : warning && draft.rounds.length ? "has-warning" : ""}`}
               aria-live="polite"
             >
-              {errors.length ? (
+              {pendingWorksheet ? (
+                <>
+                  <span className="validation-icon">
+                    <Braces size={10} />
+                  </span>
+                  <span>Finish this instruction to update the preview.</span>
+                </>
+              ) : errors.length ? (
                 <>
                   <AlertCircle size={15} />
                   <div>

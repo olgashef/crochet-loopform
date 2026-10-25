@@ -1,0 +1,335 @@
+.pattern-worksheet {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #fffdf9;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #d8ddd3 transparent;
+}
+.worksheet-title {
+  padding: 17px 19px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.worksheet-title > span {
+  font-size: 7px;
+  letter-spacing: 1.3px;
+  color: #a4aa97;
+}
+.worksheet-title input {
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.3px;
+  color: #52614c;
+  width: 100%;
+}
+.worksheet-title input:focus {
+  box-shadow: 0 1px #9caf87;
+}
+.worksheet-columns,
+.worksheet-row {
+  display: grid;
+  grid-template-columns: 67px minmax(0, 1fr) 46px 34px;
+  align-items: start;
+  padding: 0 12px;
+}
+.worksheet-columns {
+  font-size: 7px;
+  letter-spacing: 1px;
+  color: #9da58e;
+  padding-top: 9px;
+  padding-bottom: 9px;
+  border-top: 1px solid #eef0e5;
+  border-bottom: 1px solid #e5e9da;
+  background: #fafbf5;
+  align-items: center;
+}
+.worksheet-columns > span:last-of-type {
+  text-align: right;
+}
+.worksheet-columns > span:nth-child(3) {
+  text-align: right;
+}
+.worksheet-row {
+  min-height: 32px;
+  border-bottom: 1px solid #eaded7;
+  transition: background 0.12s;
+}
+.worksheet-row.editing {
+  background: #f1f5e9;
+}
+.worksheet-row.selected {
+  background: #e9f1dd;
+  box-shadow: inset 3px 0 #91ac72;
+}
+.worksheet-row.invalid {
+  background: #fff4ed;
+}
+.worksheet-round {
+  padding-top: 9px;
+  font-size: 10px;
+  font-weight: 650;
+  color: #56604e;
+  white-space: nowrap;
+  letter-spacing: -0.25px;
+}
+.worksheet-instruction {
+  min-width: 0;
+  padding: 2px 0;
+}
+.worksheet-instruction textarea {
+  display: block;
+  resize: none;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  padding: 3px 4px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: #4d5845;
+  overflow: hidden;
+  font-family: "DM Sans Variable", sans-serif;
+  border-radius: 3px;
+}
+.worksheet-instruction textarea::placeholder {
+  color: #b5bbaa;
+}
+.worksheet-instruction textarea:focus {
+  background: #ffffff60;
+}
+.worksheet-row-error {
+  font-size: 8px;
+  line-height: 1.6;
+  color: #b57a5a;
+  display: block;
+  padding: 0 4px 6px;
+}
+.worksheet-count {
+  text-align: right;
+  padding-top: 9px;
+  font-size: 11px;
+  font-weight: 550;
+  font-style: italic;
+  font-variant-numeric: tabular-nums;
+  color: #617657;
+}
+.worksheet-count.pending {
+  color: #b0b5a4;
+}
+.worksheet-count small {
+  display: block;
+  font-size: 6px;
+  font-style: normal;
+  font-weight: 400;
+  color: #a7b09a;
+  line-height: 1.3;
+  margin-top: 2px;
+}
+.worksheet-row-tools {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 4px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.worksheet-row:hover .worksheet-row-tools,
+.worksheet-row:focus-within .worksheet-row-tools {
+  opacity: 1;
+}
+.worksheet-row-tools button {
+  padding: 2px;
+  color: #a5b094;
+  height: 15px;
+  display: flex;
+  align-items: center;
+}
+.worksheet-row-tools button:hover {
+  color: #5d7e4c;
+}
+.worksheet-yarn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 11px 17px 7px;
+  font-size: 8px;
+  color: #96a487;
+  text-transform: capitalize;
+}
+.worksheet-yarn label {
+  position: relative;
+  display: block;
+  width: 13px;
+  height: 13px;
+  margin-right: 1px;
+  cursor: pointer;
+}
+.worksheet-yarn input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  z-index: 1;
+}
+.worksheet-yarn label > span {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px #d8dfcd;
+  position: absolute;
+  top: 1px;
+}
+.worksheet-note {
+  font-size: 9px;
+  line-height: 1.6;
+  color: #a1a68f;
+  padding: 5px 17px;
+  font-style: italic;
+}
+.worksheet-note.invalid {
+  color: #b57a5a;
+  background: #fff4ed;
+}
+.worksheet-add {
+  padding: 13px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.worksheet-add button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #799266;
+  font-size: 10px;
+  padding: 4px 0;
+}
+.worksheet-add button:hover {
+  color: #285c4b;
+}
+.worksheet-add > span {
+  font-size: 7px;
+  color: #afb79f;
+}
+.worksheet-footer {
+  margin-top: auto;
+  padding: 14px 17px;
+  border-top: 1px solid #e9ecdf;
+  background: #fbfcf6;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #91a180;
+  font-size: 9px;
+}
+.worksheet-footer small {
+  font-size: 8px;
+  line-height: 1.8;
+  color: #a4ad96;
+}
+.worksheet-footer strong {
+  font-weight: 500;
+  margin-right: 5px;
+}
+.worksheet-footer code {
+  font-family: inherit;
+  background: #edf2e3;
+  border-radius: 3px;
+  padding: 2px 4px;
+  color: #839471;
+}
+.worksheet-footer button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 8px;
+  color: #91a180;
+  padding: 2px 0;
+  align-self: flex-start;
+}
+.worksheet-footer button:hover {
+  color: #285c4b;
+}
+.editor-format-toggle {
+  display: flex;
+  gap: 2px;
+  background: #f1f3eb;
+  border-radius: 5px;
+  padding: 2px;
+  margin-right: 6px;
+}
+.editor-format-toggle button {
+  font-size: 9px;
+  padding: 4px 8px;
+  color: #9ca48d;
+  border-radius: 4px;
+}
+.editor-format-toggle button.active {
+  background: white;
+  color: #627752;
+  box-shadow: 0 1px 3px #21391a0d;
+}
+.editor-panel > .panel-heading {
+  gap: 6px;
+}
+.editor-format-toggle + .help-button {
+  margin-left: 0;
+}
+@media (max-width: 1150px) {
+  .worksheet-columns,
+  .worksheet-row {
+    grid-template-columns: 58px minmax(0, 1fr) 39px 24px;
+    padding-left: 10px;
+    padding-right: 8px;
+  }
+  .worksheet-round {
+    font-size: 9px;
+  }
+  .worksheet-instruction textarea {
+    font-size: 10px;
+  }
+  .worksheet-count {
+    font-size: 10px;
+  }
+  .worksheet-title {
+    padding-left: 15px;
+  }
+  .worksheet-columns {
+    font-size: 6px;
+  }
+  .worksheet-row-tools {
+    opacity: 0.5;
+  }
+  .editor-format-toggle button {
+    font-size: 8px;
+    padding: 4px 6px;
+  }
+}
+@media (max-width: 650px) {
+  .worksheet-columns,
+  .worksheet-row {
+    grid-template-columns: 62px minmax(0, 1fr) 42px 26px;
+  }
+  .worksheet-instruction textarea {
+    font-size: 11px;
+  }
+  .worksheet-row-tools {
+    opacity: 0.55;
+  }
+}
+.worksheet-paste-error {
+  font-size: 9px;
+  color: #b57a5a;
+  line-height: 1.6;
+}

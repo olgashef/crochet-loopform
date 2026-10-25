@@ -23,7 +23,10 @@ npm run preview
 
 ## Workspace
 
-- Write patterns in the syntax-highlighted editor. Auto-render updates valid changes after a short pause; turn it off to render manually. Use **Ctrl+Enter / Cmd+Enter** to render at any time.
+- Write in the **Worksheet**: round labels, instructions, and automatically calculated totals match a printed crochet pattern. Counts are read-only; no typing or updating totals is needed. **Code** switches to the full syntax-highlighted text editor without converting or losing pattern information.
+- In the worksheet, **Enter** moves to the next round (or adds one), **Shift+Enter** inserts a round below, and Backspace removes an empty row. Paste tab-separated rows directly from a spreadsheet. Round labels renumber automatically when you insert/delete a row or change a grouped duration.
+- Use `[sc, inc] × 7`, `7 sc in mr`, and `49 sc for 8 rounds`. A hold is shown as a range such as **Rnd 9–16**, with the stitch total **per round**. Independent totals remain visible if an earlier row has an error, and the last valid model stays available.
+- Write patterns in either editor. Auto-render updates valid changes after a short pause; turn it off to render manually. Use **Ctrl+Enter / Cmd+Enter** to render at any time.
 - Inspect count and attachment errors by source line. An invalid edit preserves the last valid preview.
 - Orbit, pan and zoom the 3D model. Click a stitch to inspect its round, position, type, source line and parent connections.
 - Switch between **Stitches** and **Structure**, adjust display stitch size, reset the camera or use fullscreen.
@@ -31,7 +34,7 @@ npm run preview
 - Enable **Move rows** (↕), grab a row line or the green vertical handle, and drag up/down. **Front view** provides a straight-on view. Use ↑/↓ to nudge (Shift for larger steps), Escape to cancel a drag, or Undo/Reset to restore positions. The numeric offset and Up/Down buttons provide another way to move a row.
 - Row adjustments change the preview geometry without rewriting stitch counts. They are saved locally and included in Loopform project JSON and rendered PNGs. Plain pattern text contains only crochet instructions. Rendering changed pattern text or loading another example starts with the new pattern’s shape.
 - Recognize stitch types by shape: round **SC** bubbles, elongated **HDC** beads, longer **DC** beads and the tallest **TR** beads. Beads align with their parent connections to follow the fabric's slope; two-parent stitches use the parents' midpoint. Tall stitch bodies extend down from their upper row anchor along the connection and are bounded by the space between rows. Chains and slip stitches are flattened; decreases are wide beads. The shape key shows the types in the visible rounds while yarn colors retain their pattern meaning.
-- Load the **Mushroom cap**, **Little sphere**, **Everyday basket** or **Stitch sampler** examples. The sampler uses one color to compare stitch shapes directly.
+- Load the **Mushroom cap**, **Little sphere**, **Everyday basket** **Stitch sampler** or **Seven-stitch shaping** examples. The sampler uses one color to compare stitch shapes directly.
 - Import `.crochet` / `.txt` patterns or version-1 Loopform `.json` projects. Export pattern text, an editable project or a PNG of the current model view.
 - Pattern text, row adjustments and display thickness are saved in this browser's local storage when available. Export a file to keep a portable copy; browser storage is not a backup.
 
@@ -68,6 +71,8 @@ Use US crochet abbreviations and one numbered round per line. Round numbers must
 | `// comment`            | Comment, including after instructions                             |
 | `# My pattern`          | Comment; the first nonempty `#` line supplies the pattern title   |
 
+Printed notation such as `Rnd 1 7 sc in mr`, `Rnd 3: [sc, inc] × 7` and `Rnd 9–16: 49 sc for 8 rounds` is supported. Explicit ranges must agree with any `for N rounds` suffix. Written-pattern exports include freshly calculated `(total)` values.
+
 Aliases include `ss`, `chain`, `increase`, `decrease`, and `R1:` / `Round 1:` round labels. Repeats also accept `repeat`, `x` or `*` instead of `rep`.
 
 Each later round must consume exactly the previous round's available stitches. An ordinary stitch consumes one parent, an increase consumes one and produces two, a decrease consumes two and produces one, and a chain creates an output without consuming a parent. These explicit rules make the preview predictable; they do not cover every real crochet construction. To keep interactive work bounded, patterns are limited to 8,000 stitch outputs, 150 rounds, 120,000 characters and 12 nested repeat levels.
@@ -85,6 +90,7 @@ Flat rows, turns, BLO/FLO, separate-component sewing, specialized hdc decreases 
 - `src/lib/pattern.ts`: safe pattern tokenizer/parser, repeat expansion, count validation, attachment graph and examples.
 - `src/lib/geometry.ts`: original deterministic profile-layout approximation and graph links.
 - `src/components/PatternEditor.tsx`: CodeMirror editor and source-line selection.
+- `src/components/PatternWorksheet.tsx` and `src/lib/worksheet.ts`: worksheet authoring, automatic totals, round ranges, spreadsheet paste and written export.
 - `src/components/ModelViewer.tsx`: Three.js rendering, camera controls, picking and PNG capture.
 - `src/lib/stitchAppearance.ts` and `src/components/StitchLegend.tsx`: shared stitch-shape definitions and the visible-round shape key.
 - `src/lib/stitchFrame.ts`: parent-aligned bead rotations and rotated bounds.

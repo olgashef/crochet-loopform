@@ -60,7 +60,11 @@ const crochetLanguage = StreamLanguage.define({
     }
     if (stream.match(/(?:sc|hdc|dc|tr|ch|inc|dec|slst|ss)\b/i))
       return "keyword";
-    if (stream.match(/(?:rep|repeat|times|in)\b/i)) return "operator";
+    if (
+      stream.match(/[×*]/) ||
+      stream.match(/(?:rep|repeat|times|in|for|rounds?|rnds?|x)\b/i)
+    )
+      return "operator";
     if (stream.match(/(?:mc|mr)\b/i)) return "typeName";
     if (stream.match(/\d+/)) return "number";
     if (stream.match(/[\[\]()]/)) return "bracket";
