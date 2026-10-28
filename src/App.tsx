@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { PatternWorksheet } from "./components/PatternWorksheet";
 import { SafetyEyeControls } from "./components/SafetyEyeControls";
+import { setPatternOrientation, type PatternOrientation } from "./lib/orientation";
 import { csvPattern, writtenPattern } from "./lib/worksheet";
 import { PatternEditor } from "./components/PatternEditor";
 import { ModelViewer, type ViewerHandle } from "./components/ModelViewer";
@@ -1166,6 +1167,21 @@ export default function App() {
                 ))}
                 {colors.length > 4 && <small>+{colors.length - 4}</small>}
               </div>
+              <label className="orientation-control">
+                <span>First round</span>
+                <select
+                  aria-label="Model orientation"
+                  value={draft.orientation}
+                  onChange={(event) => {
+                    const orientation = event.target.value as PatternOrientation;
+                    setSource((value) => setPatternOrientation(value, orientation));
+                    setCompiledSource((value) => setPatternOrientation(value, orientation));
+                  }}
+                >
+                  <option value="bottom-up">At bottom</option>
+                  <option value="top-down">At top</option>
+                </select>
+              </label>
               <label className="thickness-control">
                 <span>Stitch size</span>
                 <input

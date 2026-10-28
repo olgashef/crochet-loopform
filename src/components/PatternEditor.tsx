@@ -52,6 +52,7 @@ const crochetLanguage = StreamLanguage.define({
       stream.skipToEnd();
       return "heading";
     }
+    if (atLineStart && stream.match(/orientation\s+(?:top-down|bottom-up)\b/i)) return "operator";
     const color = stream.match(/\[\s*(#[\da-fA-F]+|[A-Za-z]+)\s*\]/, false);
     if (Array.isArray(color) && resolveYarnColor(color[1])) {
       stream.pos += color[0].length;

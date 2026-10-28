@@ -1,4 +1,5 @@
 import { parseEyeDirective, validateEyePair, type SafetyEyePair } from "./safetyEyes";
+import type { PatternOrientation } from "./orientation";
 
 export type StitchType = "sc" | "hdc" | "dc" | "tr" | "ch" | "slst" | "dec" | "bobble";
 
@@ -35,6 +36,7 @@ export interface Diagnostic {
 }
 
 export interface ParsedPattern {
+  orientation: PatternOrientation;
   eyes: SafetyEyePair[];
   rounds: PatternRound[];
   stitches: Stitch[];
@@ -372,6 +374,7 @@ export function analyzeInstruction(text: string) {
  */
 export function parsePattern(source: string): ParsedPattern {
   const parsed: ParsedPattern = {
+    orientation: "bottom-up",
     rounds: [],
     eyes: [],
     stitches: [],
@@ -406,6 +409,12 @@ export function parsePattern(source: string): ParsedPattern {
     }
 
     try {
+      if (/^orientation\b/i.test(line)) {
+        const match = /^orientation\s+(bottom-up|top-down)$/i.exec(line);
+        if (!match) throw new PatternSyntaxError("Use orientation top-down or orientation bottom-up on its own line.");
+        parsed.orientation = match[1].toLowerCase() as PatternOrientation;
+        continue;
+      }
       const eyes = parseEyeDirective(line, lineNumber);
       if (eyes) {
         if (parsed.eyes.length >= 16) throw new PatternSyntaxError("Use at most 16 pairs of safety eyes.");
@@ -720,6 +729,7 @@ Rnd 8: [beige] 24 sc (24)`,
     name: "Orange critter",
     description: "Two bobble ears, safety eyes, a white belly and a chain tail.",
     source: `# Orange critter
+orientation top-down
 [orange]
 Rnd 1: 6 sc in mr (6)
 Rnd 2: 6 inc (12)

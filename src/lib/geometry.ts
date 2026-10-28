@@ -307,11 +307,13 @@ export function buildGeometry(pattern: ParsedPattern): ModelGeometry {
     point.position = point.position.map(
       (value, axis) => value - center[axis],
     ) as Position;
+    if (pattern.orientation === "top-down") point.position[1] *= -1;
   }
   for (const round of roundCenters) {
     round.center = round.center.map(
       (value, axis) => value - center[axis],
     ) as Position;
+    if (pattern.orientation === "top-down") round.center[1] *= -1;
   }
   return {
     points,
