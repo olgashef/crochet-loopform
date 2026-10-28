@@ -383,6 +383,7 @@ export function parsePattern(source: string): ParsedPattern {
   };
   let color = YARN_COLORS.red;
   let named = false;
+  let explicitOrientation = false;
   let coursePrevious: number | null = null;
   const lines = source.split(/\r?\n/);
 
@@ -413,6 +414,7 @@ export function parsePattern(source: string): ParsedPattern {
         const match = /^orientation\s+(bottom-up|top-down)$/i.exec(line);
         if (!match) throw new PatternSyntaxError("Use orientation top-down or orientation bottom-up on its own line.");
         parsed.orientation = match[1].toLowerCase() as PatternOrientation;
+        explicitOrientation = true;
         continue;
       }
       const eyes = parseEyeDirective(line, lineNumber);
@@ -593,6 +595,18 @@ export function parsePattern(source: string): ParsedPattern {
     const message = validateEyePair(eyes, parsed.rounds);
     if (message) parsed.diagnostics.push({ line: eyes.line, severity: "error", message });
   }
+
+  // Older saved patterns predate the orientation directive. Eyes in the early
+  // rounds identify a head-first construction, so display that end at the top.
+  // An explicit user choice always takes precedence over this default.
+  if (
+    !explicitOrientation &&
+    parsed.eyes.length > 0 &&
+    parsed.eyes.every((eyes) =>
+      validateEyePair(eyes, parsed.rounds) === null &&
+      (eyes.lowerRound + eyes.upperRound) / 2 < (parsed.rounds.length + 1) / 2,
+    )
+  ) parsed.orientation = "top-down";
 
   if (
     !parsed.rounds.length &&

@@ -10,6 +10,19 @@ import { writtenPattern, csvPattern } from "./worksheet";
 
 const critter = EXAMPLES.find((example) => example.id === "orange-critter")!.source;
 
+test("previously saved head-first patterns without an orientation directive open upright", () => {
+  const legacy = critter.split("\n").filter((line) => !line.startsWith("orientation ")).join("\n");
+  const parsed = parsePattern(legacy);
+  assert.deepEqual(parsed.diagnostics, []);
+  assert.equal(parsed.orientation, "top-down");
+  const model = buildGeometry(parsed);
+  const eyes = buildSafetyEyes(model, parsed.eyes);
+  assert.ok(model.roundCenters[0].center[1] > model.roundCenters.at(-1)!.center[1]);
+  assert.ok(eyes.every((eye) => eye.position[1] > 0));
+  assert.equal(parsePattern(setPatternOrientation(legacy, "bottom-up")).orientation, "bottom-up");
+  assert.equal(parsePattern(legacy.replace(/^eyes .*$/m, "")).orientation, "bottom-up");
+});
+
 test("top-down places the critter's head and eyes above its tail without changing topology", () => {
   const top = parsePattern(setPatternOrientation(critter, "top-down"));
   const bottom = parsePattern(setPatternOrientation(critter, "bottom-up"));

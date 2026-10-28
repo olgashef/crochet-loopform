@@ -42,7 +42,7 @@ npm run preview
 
 ## Pattern format
 
-For patterns worked from the head downward, choose **First round → At top** below the preview, or add `orientation top-down` on its own line. The Orange critter example uses this orientation. `orientation bottom-up` (the default) places the first round at the bottom. Orientation preserves stitch numbering, eyes, branches and row adjustments and is saved in pattern/project exports and browser storage.
+For patterns worked from the head downward, choose **First round → At top** below the preview, or add `orientation top-down` on its own line. The Orange critter example uses this orientation. Older saved patterns without a directive also open head-up when all safety eyes are in the first half of the rounds. Otherwise, rounds build upward by default. An explicit `orientation bottom-up` or `orientation top-down` always overrides that automatic choice. Orientation preserves stitch numbering, eyes, branches and row adjustments and is saved in pattern/project exports and browser storage.
 
 Use US crochet abbreviations and one numbered round per line. Round numbers must start at 1 and remain consecutive.
 
