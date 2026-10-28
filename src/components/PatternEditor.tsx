@@ -29,7 +29,7 @@ import {
   indentWithTab,
 } from "@codemirror/commands";
 import { tags } from "@lezer/highlight";
-import type { Diagnostic } from "../lib/pattern";
+import { resolveYarnColor, type Diagnostic } from "../lib/pattern";
 import "./PatternEditor.css";
 
 export interface PatternEditorProps {
@@ -52,10 +52,9 @@ const crochetLanguage = StreamLanguage.define({
       stream.skipToEnd();
       return "heading";
     }
-    if (
-      atLineStart &&
-      stream.match(/\[(?:#[\da-fA-F]{3,8}|[A-Za-z][A-Za-z -]*)\]\s*$/)
-    ) {
+    const color = stream.match(/\[\s*(#[\da-fA-F]+|[A-Za-z]+)\s*\]/, false);
+    if (Array.isArray(color) && resolveYarnColor(color[1])) {
+      stream.pos += color[0].length;
       return "string";
     }
     if (stream.match(/(?:sc|hdc|dc|tr|ch|inc|dec|slst|ss)\b/i))

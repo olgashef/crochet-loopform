@@ -1313,7 +1313,11 @@ export default function App() {
                 </div>
                 <p className="guide-note">
                   Use <code>[beige]</code> or <code>[#a9c6b5]</code> to change
-                  yarn color. Repeats can be nested. Start comments with{" "}
+                  yarn color, including within a round:{" "}
+                  <code>4: [red] 9 sc, [beige] 9 sc (18)</code>.
+                  Each color applies to following stitches until the next color
+                  change, even across rounds. Color changes also work inside
+                  repeats. Repeats can be nested. Start comments with{" "}
                   <code>//</code> or <code>#</code>.
                 </p>
                 <div className="guide-shortcut">

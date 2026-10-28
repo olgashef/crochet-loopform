@@ -14,6 +14,7 @@ export interface Stitch {
 
 export interface PatternRound {
   number: number;
+  /** First stitch's color; individual stitches may use other yarns. */
   color: string;
   stitches: Stitch[];
   inputCount: number;
@@ -78,10 +79,44 @@ export const YARN_COLORS: Readonly<Record<string, string>> = {
   mint: "#a9c6b5",
 };
 
-type Operation = StitchType | "inc";
+const STITCH_ALIASES: Readonly<Record<string, StitchType | "inc">> = {
+  sc: "sc",
+  hdc: "hdc",
+  dc: "dc",
+  tr: "tr",
+  ch: "ch",
+  chain: "ch",
+  slst: "slst",
+  ss: "slst",
+  inc: "inc",
+  increase: "inc",
+  dec: "dec",
+  decrease: "dec",
+};
+
+export function resolveYarnColor(name: string): string | null {
+  const key = name.trim().toLowerCase();
+  return Object.hasOwn(YARN_COLORS, key)
+    ? YARN_COLORS[key]
+    : /^#(?:[a-f0-9]{3}|[a-f0-9]{6})$/.test(key)
+      ? key
+      : null;
+}
+
+function yarnColor(name: string) {
+  const color = resolveYarnColor(name);
+  if (!color)
+    throw new PatternSyntaxError(
+      `Unknown yarn color “${name}”. Use a named color such as sage or a hex value such as [#a6b49d].`,
+    );
+  return color;
+}
+
+type Operation = StitchType | "inc" | { color: string; name: string };
 interface Token {
   value: string;
   position: number;
+  color?: boolean;
 }
 
 class PatternSyntaxError extends Error {}
@@ -95,6 +130,13 @@ function tokenize(source: string): Token[] {
     const whitespace = /^\s+/.exec(rest);
     if (whitespace) {
       position += whitespace[0].length;
+      continue;
+    }
+    // A single non-stitch name in brackets is a color, not a repeat group.
+    const color = /^\[\s*(#[^\s\[\],]*|[a-z_][\w-]*)\s*\]/i.exec(rest);
+    if (color && !Object.hasOwn(STITCH_ALIASES, color[1].toLowerCase())) {
+      tokens.push({ value: color[1].toLowerCase(), position, color: true });
+      position += color[0].length;
       continue;
     }
     const token = /^(?:\d+|[a-z]+|[\[\],*×])/i.exec(rest);
@@ -129,24 +171,42 @@ function parseOperations(source: string): Operation[] {
     return count;
   }
 
-  function append(target: Operation[], group: Operation[], count: number) {
-    if (target.length + group.length * count > MAX_STITCHES) {
+  interface Group {
+    operations: Operation[];
+    stitchCount: number;
+  }
+  function append(target: Group, group: Group, count: number) {
+    // Bound both stitches and color commands before expanding nested repeats.
+    if (
+      target.stitchCount + group.stitchCount * count > MAX_STITCHES ||
+      target.operations.length + group.operations.length * count > MAX_STITCHES * 2
+    ) {
       throw new PatternSyntaxError(
         `This repeat is too large. Keep the pattern below ${MAX_STITCHES.toLocaleString()} stitches.`,
       );
     }
-    for (let i = 0; i < count; i++) target.push(...group);
+    for (let i = 0; i < count; i++) target.operations.push(...group.operations);
+    target.stitchCount += group.stitchCount * count;
   }
 
-  function sequence(depth: number): Operation[] {
+  function sequence(depth: number): Group {
     if (depth > 12)
       throw new PatternSyntaxError(
         "Repeats are nested too deeply. Use at most 12 levels.",
       );
-    const result: Operation[] = [];
+    const result: Group = { operations: [], stitchCount: 0 };
     while (cursor < tokens.length && tokens[cursor].value !== "]") {
       if (tokens[cursor].value === ",") {
         cursor++;
+        continue;
+      }
+      if (tokens[cursor].color) {
+        const name = tokens[cursor++].value;
+        append(
+          result,
+          { operations: [{ color: yarnColor(name), name }], stitchCount: 0 },
+          1,
+        );
         continue;
       }
       if (tokens[cursor].value === "[") {
@@ -155,7 +215,7 @@ function parseOperations(source: string): Operation[] {
         if (tokens[cursor]?.value !== "]")
           throw new PatternSyntaxError("This repeat is missing its closing ].");
         cursor++;
-        if (!group.length)
+        if (!group.stitchCount)
           throw new PatternSyntaxError("A repeat group cannot be empty.");
         let repetitions = 1;
         if (
@@ -175,38 +235,25 @@ function parseOperations(source: string): Operation[] {
         throw new PatternSyntaxError(
           "Add a stitch after the number, for example 6 sc.",
         );
-      const aliases: Record<string, Operation> = {
-        sc: "sc",
-        hdc: "hdc",
-        dc: "dc",
-        tr: "tr",
-        ch: "ch",
-        chain: "ch",
-        slst: "slst",
-        ss: "slst",
-        inc: "inc",
-        increase: "inc",
-        dec: "dec",
-        decrease: "dec",
-      };
-      const operation = Object.hasOwn(aliases, token.value)
-        ? aliases[token.value]
-        : undefined;
+      const operation =
+        !token.color && Object.hasOwn(STITCH_ALIASES, token.value)
+          ? STITCH_ALIASES[token.value]
+          : undefined;
       if (!operation)
         throw new PatternSyntaxError(
           `Unknown stitch “${token.value}”. Supported: sc, hdc, dc, tr, ch, slst, inc and dec.`,
         );
-      append(result, [operation], count);
+      append(result, { operations: [operation], stitchCount: 1 }, count);
     }
     return result;
   }
 
-  const operations = sequence(0);
+  const group = sequence(0);
   if (cursor < tokens.length)
     throw new PatternSyntaxError("There is a closing ] without a matching [.");
-  if (!operations.length)
+  if (!group.stitchCount)
     throw new PatternSyntaxError("This round has no stitches yet.");
-  return operations;
+  return group.operations;
 }
 
 export interface RoundLine {
@@ -257,10 +304,14 @@ export function analyzeInstruction(text: string) {
     declaredCount,
     repeatRounds,
     inputCount: operations.reduce(
-      (n, op) => n + (op === "ch" ? 0 : op === "dec" ? 2 : 1),
+      (n, op) =>
+        n + (typeof op !== "string" || op === "ch" ? 0 : op === "dec" ? 2 : 1),
       0,
     ),
-    outputCount: operations.reduce((n, op) => n + (op === "inc" ? 2 : 1), 0),
+    outputCount: operations.reduce(
+      (n, op) => n + (typeof op !== "string" ? 0 : op === "inc" ? 2 : 1),
+      0,
+    ),
   };
 }
 
@@ -309,17 +360,7 @@ export function parsePattern(source: string): ParsedPattern {
         directive &&
         !/\b(?:sc|hdc|dc|tr|inc|dec|ch|slst)\b/i.test(directive[1])
       ) {
-        const name = directive[1].trim().toLowerCase();
-        const resolved = Object.hasOwn(YARN_COLORS, name)
-          ? YARN_COLORS[name]
-          : /^#(?:[a-f0-9]{3}|[a-f0-9]{6})$/i.test(name)
-            ? name
-            : null;
-        if (!resolved)
-          throw new PatternSyntaxError(
-            `Unknown yarn color “${name}”. Use a named color such as sage or a hex value such as [#a6b49d].`,
-          );
-        color = resolved;
+        color = yarnColor(directive[1].trim().toLowerCase());
         continue;
       }
 
@@ -379,6 +420,7 @@ export function parsePattern(source: string): ParsedPattern {
         let increases = 0;
         let decreases = 0;
         for (const operation of operations) {
+          if (typeof operation !== "string") continue;
           consumed += operation === "ch" ? 0 : operation === "dec" ? 2 : 1;
           produced += operation === "inc" ? 2 : 1;
           if (operation === "inc") increases++;
@@ -413,6 +455,10 @@ export function parsePattern(source: string): ParsedPattern {
         let parentCursor = 0;
         const firstID = parsed.stitches.length;
         for (const operation of operations) {
+          if (typeof operation !== "string") {
+            color = operation.color;
+            continue;
+          }
           const needed =
             !parentRound || operation === "ch"
               ? 0
@@ -439,6 +485,7 @@ export function parsePattern(source: string): ParsedPattern {
             });
           }
         }
+        round.color = round.stitches[0].color;
         parsed.rounds.push(round);
         parsed.stitches.push(...round.stitches);
         if (roundNumber === 1 && !foundation)
@@ -576,5 +623,18 @@ Rnd 7: 42 sc
 // An initial inc in Rnd 8 makes the intended 49 stitches.
 Rnd 8: 2 sc, inc, [5 sc, inc] × 6, 3 sc
 Rnd 9–16: 49 sc for 8 rounds`,
+  },
+  {
+    id: "colorwork",
+    name: "Two-color basket",
+    description: "Change colors within a round, in blocks or repeated stitches.",
+    source: `# Two-color basket
+[red]
+Rnd 1: 8 sc in mr (8)
+Rnd 2: [[red] inc, [beige] inc] × 4 (16)
+Rnd 3: [[red] sc, inc, [beige] sc, inc] × 4 (24)
+Rnd 4–6: [red] 12 sc, [beige] 12 sc for 3 rounds (24)
+Rnd 7: [[red] sc, [beige] sc] × 12 (24)
+Rnd 8: [beige] 24 sc (24)`,
   },
 ];

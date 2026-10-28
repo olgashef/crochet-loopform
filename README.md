@@ -34,7 +34,7 @@ npm run preview
 - Enable **Move rows** (↕), grab a row line or the green vertical handle, and drag up/down. **Front view** provides a straight-on view. Use ↑/↓ to nudge (Shift for larger steps), Escape to cancel a drag, or Undo/Reset to restore positions. The numeric offset and Up/Down buttons provide another way to move a row.
 - Row adjustments change the preview geometry without rewriting stitch counts. They are saved locally and included in Loopform project JSON and rendered PNGs. Plain pattern text contains only crochet instructions. Rendering changed pattern text or loading another example starts with the new pattern’s shape.
 - Recognize stitch types by shape: round **SC** bubbles, elongated **HDC** beads, longer **DC** beads and the tallest **TR** beads. Beads align with their parent connections to follow the fabric's slope; two-parent stitches use the parents' midpoint. Tall stitch bodies extend down from their upper row anchor along the connection and are bounded by the space between rows. Chains and slip stitches are flattened; decreases are wide beads. The shape key shows the types in the visible rounds while yarn colors retain their pattern meaning.
-- Load the **Mushroom cap**, **Little sphere**, **Everyday basket** **Stitch sampler** or **Seven-stitch shaping** examples. The sampler uses one color to compare stitch shapes directly.
+- Load the **Mushroom cap**, **Little sphere**, **Everyday basket**, **Stitch sampler**, **Seven-stitch shaping** or **Two-color basket** examples. The sampler uses one color to compare stitch shapes directly; the two-color basket demonstrates mid-round color changes.
 - Import `.crochet` / `.txt` patterns or version-1 Loopform `.json` projects. Export pattern text, an editable project or a PNG of the current model view.
 - Choose **Export → Pattern CSV** for a spreadsheet with round labels, instructions, calculated stitch totals per round, yarn colors and notes. Grouped rounds remain grouped; unfinished instructions have a blank total. CSV export uses the current editor contents.
 - Pattern text, row adjustments and display thickness are saved in this browser's local storage when available. Export a file to keep a portable copy; browser storage is not a backup.
@@ -75,6 +75,16 @@ Use US crochet abbreviations and one numbered round per line. Round numbers must
 Printed notation such as `Rnd 1 7 sc in mr`, `Rnd 3: [sc, inc] × 7` and `Rnd 9–16: 49 sc for 8 rounds` is supported. Explicit ranges must agree with any `for N rounds` suffix. Written-pattern exports include freshly calculated `(total)` values.
 
 Aliases include `ss`, `chain`, `increase`, `decrease`, and `R1:` / `Round 1:` round labels. Repeats also accept `repeat`, `x` or `*` instead of `rep`.
+
+Change yarn **within a round** by placing a color marker before the stitches that use it. This works in both Worksheet and Code:
+
+```text
+Rnd 1: [red] 4 sc, [beige] 4 sc in mr (8)
+Rnd 2: [[red] sc, [beige] sc] × 4 (8)
+Rnd 3: 8 sc (8)
+```
+
+Markers consume no stitches. The active color continues until the next marker, including across repeat groups and round boundaries; round 3 above is all beige. An increase makes both of its stitches in the active color. Standalone color lines still work. Written text, project JSON and CSV exports preserve inline markers; the CSV Yarn column lists the colors used in each row, separated by semicolons. These markers describe stitch colors, not yarn-carrying or finishing techniques.
 
 Each later round must consume exactly the previous round's available stitches. An ordinary stitch consumes one parent, an increase consumes one and produces two, a decrease consumes two and produces one, and a chain creates an output without consuming a parent. These explicit rules make the preview predictable; they do not cover every real crochet construction. To keep interactive work bounded, patterns are limited to 8,000 stitch outputs, 150 rounds, 120,000 characters and 12 nested repeat levels.
 

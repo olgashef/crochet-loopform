@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  analyzeInstruction,
   EXAMPLES,
   MAX_STITCHES,
   parsePattern,
@@ -9,6 +10,68 @@ import {
 
 const errors = (source: string) =>
   parsePattern(source).diagnostics.filter((item) => item.severity === "error");
+
+test("inline yarn changes color following stitches and persist across rounds until overridden", () => {
+  const result = parsePattern(
+    "[sage]\nRnd 1: 2 sc, [BEIGE] 2 sc in mr (4)\nRnd 2: sc, [ #AbC ] 3 sc (4) // inline hex\nRnd 3: 4 sc (4)\n[blue]\nRnd 4: 4 sc (4)",
+  );
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.rounds[0].stitches.map((s) => s.color), [
+    YARN_COLORS.sage, YARN_COLORS.sage, YARN_COLORS.beige, YARN_COLORS.beige,
+  ]);
+  assert.deepEqual(result.rounds[1].stitches.map((s) => s.color), [
+    YARN_COLORS.beige, "#abc", "#abc", "#abc",
+  ]);
+  assert.ok(result.rounds[2].stitches.every((s) => s.color === "#abc"));
+  assert.ok(result.rounds[3].stitches.every((s) => s.color === YARN_COLORS.blue));
+  assert.deepEqual(result.rounds[1].stitches.map((s) => s.parents), [[0], [1], [2], [3]]);
+});
+
+test("nested color repeats preserve topology, increase children and decrease parents", () => {
+  const plain = parsePattern("1: 8 sc in mr\n2: [sc, inc] × 4\n3: [sc, dec] × 4");
+  const colored = parsePattern(
+    "1: [red] 8 sc in mr\n2: [[[red] sc, [beige] inc] × 2] × 2\n3: [[#aabbcc] sc, [navy] dec] × 4",
+  );
+  assert.deepEqual(colored.diagnostics, []);
+  assert.deepEqual(colored.stitches.map(({ color: _, ...s }) => s), plain.stitches.map(({ color: _, ...s }) => s));
+  assert.deepEqual(colored.rounds[1].stitches.map((s) => s.color),
+    Array.from({ length: 4 }, () => [YARN_COLORS.red, YARN_COLORS.beige, YARN_COLORS.beige]).flat());
+  assert.deepEqual(colored.rounds[2].stitches.map((s) => s.color),
+    Array.from({ length: 4 }, () => ["#aabbcc", YARN_COLORS.navy]).flat());
+  assert.equal(colored.rounds[1].color, YARN_COLORS.red);
+  assert.equal(colored.rounds[2].color, "#aabbcc");
+});
+
+test("grouped rounds repeat color changes with the previous round's final color", () => {
+  const result = parsePattern("1: [red] 4 sc in mr\n2–3: 2 sc, [beige] 2 sc\n4: 4 sc [blue]\n5: 4 sc");
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.rounds[1].stitches.map((s) => s.color),
+    [YARN_COLORS.red, YARN_COLORS.red, YARN_COLORS.beige, YARN_COLORS.beige]);
+  assert.ok(result.rounds.slice(2, 4).every((r) => r.stitches.every((s) => s.color === YARN_COLORS.beige)));
+  assert.ok(result.rounds[4].stitches.every((s) => s.color === YARN_COLORS.blue));
+});
+
+test("colors do not consume parents or contribute to counts, including chains and stitch aliases", () => {
+  const summary = analyzeInstruction("[red] [chain] × 2, [beige] increase, decrease, [blue] ss");
+  assert.equal(summary.inputCount, 4);
+  assert.equal(summary.outputCount, 6);
+  assert.equal(analyzeInstruction("[[red] sc] × 8000").outputCount, MAX_STITCHES);
+});
+
+test("invalid inline colors and malformed groups report their line and keep previous valid rounds", () => {
+  for (const body of ["[notacolor] 4 sc", "[#12] 4 sc", "[#gggggg] 4 sc", "[constructor] 4 sc", "[__proto__] 4 sc"]) {
+    const result = parsePattern(`1: 4 sc in mr\n2: ${body}`);
+    assert.equal(result.rounds.length, 1, body);
+    assert.equal(result.diagnostics[0].line, 2, body);
+    assert.match(result.diagnostics[0].message, /Unknown yarn color/, body);
+  }
+  assert.match(errors("1: [red]")[0].message, /no stitches/);
+  assert.match(errors("1: [[red]] × 2")[0].message, /cannot be empty/);
+  assert.match(errors("1: [[red] sc")[0].message, /missing/);
+  assert.match(errors("1: [[[red] sc] × 8000] × 8000")[0].message, /too large/);
+  assert.match(errors("1: [red] 4 sc in mr (5)")[0].message, /makes 4 stitches/);
+  assert.match(errors("1: 4 sc in mr\n2: [red] 2 sc, [beige] sc")[0].message, /uses 3 stitches/);
+});
 
 test("the screenshot pattern produces all 414 outputs with consistent round counts", () => {
   const result = parsePattern(EXAMPLES[0].source);

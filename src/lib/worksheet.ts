@@ -110,13 +110,14 @@ export function csvPattern(source: string) {
   const rows: (string | number)[][] = [
     ["Round", "Instructions", "Total", "Yarn", "Notes"],
   ];
-  let yarn = "";
+  let yarn = "red";
   for (const line of source.split(/\r?\n/)) {
     if (!line.trim()) continue;
-    const color = /^\s*\[([^\]]+)\]\s*$/.exec(line);
+    const [code, ...notes] = line.split("//");
+    const color = /^\s*\[([^\]]+)\]\s*$/.exec(code);
     if (color) {
-      yarn = color[1];
-      rows.push(["", "", "", yarn, ""]);
+      yarn = color[1].trim().toLowerCase();
+      rows.push(["", "", "", yarn, notes.join("//").trim()]);
       continue;
     }
     const row = readRoundLine(line);
@@ -128,10 +129,21 @@ export function csvPattern(source: string) {
     const [instruction, ...comments] = body.split("//");
     let total: number | string = "";
     let end = row.end ?? row.start;
+    let rowYarns = yarn;
     try {
       const summary = analyzeInstruction(body);
       total = summary.outputCount;
       end = row.start + (summary.repeatRounds ?? 1) - 1;
+      const used = new Set<string>();
+      // A grouped row may inherit the previous repetition's final color.
+      // After two passes the color state and set of used yarns are stable.
+      for (let pass = 0; pass < Math.min(2, summary.repeatRounds ?? 1); pass++) {
+        for (const operation of summary.operations) {
+          if (typeof operation === "string") used.add(yarn);
+          else yarn = operation.name;
+        }
+      }
+      rowYarns = [...used].join("; ");
     } catch {
       // Keep unfinished instructions without inventing a stitch total.
     }
@@ -139,7 +151,7 @@ export function csvPattern(source: string) {
       `Rnd ${row.start}${end > row.start ? "–" + end : ""}`,
       instruction.trim(),
       total,
-      yarn,
+      rowYarns,
       comments.join("//").trim(),
     ]);
   }

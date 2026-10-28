@@ -313,6 +313,9 @@ export function PatternWorksheet({
           <strong>Tip</strong> Write <code>49 sc for 8 rounds</code> to group
           rounds.
         </small>
+        <small>
+          Change color within a round: <code>[red] 4 sc, [beige] 4 sc</code>.
+        </small>
         <button
           onClick={() => {
             const after = lastActive.current

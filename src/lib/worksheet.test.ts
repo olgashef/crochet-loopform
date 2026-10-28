@@ -29,9 +29,32 @@ test("CSV export preserves yarn, comments and ranges with freshly calculated tot
 test("CSV export keeps unfinished edits without totals and escapes spreadsheet formulas", () => {
   const csv = csvPattern('# =HYPERLINK("example")\nRnd 1: unfinished\nRnd 2: 7 sc');
   assert.ok(csv.includes('"\'=HYPERLINK(""example"")"'));
-  assert.ok(csv.includes('"Rnd 1","unfinished","","",""'));
-  assert.ok(csv.includes('"Rnd 2","7 sc","7","",""'));
+  assert.ok(csv.includes('"Rnd 1","unfinished","","red",""'));
+  assert.ok(csv.includes('"Rnd 2","7 sc","7","red",""'));
   assert.equal(csvPattern(''), '\uFEFF"Round","Instructions","Total","Yarn","Notes"\r\n');
+});
+test("worksheet edits and text exports preserve inline colors and grouped-round stitch colors", () => {
+  const source = "[red]\nRnd 1: 4 sc in mr\nRnd 2–3: [red] 2 sc, [beige] 2 sc\nRnd 4: 4 sc";
+  const edited = editWorksheetRow(source, 2, "[blue] 2 sc, [red] 2 sc in mr (999)");
+  assert.equal(worksheetInstruction(edited.split("\n")[1]), "[blue] 2 sc, [red] 2 sc in mr");
+  const exported = writtenPattern(edited);
+  assert.match(exported, /Rnd 1: \[blue\] 2 sc, \[red\] 2 sc in mr \(4\)/);
+  assert.match(exported, /Rnd 2–3: \[red\] 2 sc, \[beige\] 2 sc for 2 rounds \(4\)/);
+  const before = parsePattern(edited);
+  const after = parsePattern(exported);
+  assert.deepEqual(before.diagnostics, []);
+  assert.deepEqual(after.diagnostics, []);
+  assert.deepEqual(after.stitches, before.stitches);
+});
+
+test("CSV preserves inline markers, lists used yarns and carries final colors to following rows", () => {
+  const csv = csvPattern("[red] // base\n1: 4 sc in mr\n2–3: sc, [beige] 3 sc\n4: 4 sc [blue]\n5: 4 sc");
+  assert.ok(csv.includes('"","","","red","base"'));
+  assert.ok(csv.includes('"Rnd 2–3","sc, [beige] 3 sc for 2 rounds","4","red; beige",""'));
+  assert.ok(csv.includes('"Rnd 4","4 sc [blue]","4","beige",""'));
+  assert.ok(csv.includes('"Rnd 5","4 sc","4","blue",""'));
+  const repeated = csvPattern("1: 4 sc in mr\n2–3: sc, [beige] 3 sc [blue]");
+  assert.ok(repeated.includes('"red; beige; blue"'));
 });
 test("printed Rnd notation expands the 16-round sample into correctly counted stitches and original source locations", () => {
   const parsed = parsePattern(sample);

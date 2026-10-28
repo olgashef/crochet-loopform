@@ -88,3 +88,18 @@ test("empty patterns produce an empty model without invalid bounds", () => {
     roundCenters: [],
   });
 });
+
+test("mid-round colors reach preview points and links without changing layout", () => {
+  const plain = buildGeometry(parsePattern("1: 4 sc in mr\n2: 4 sc"));
+  const colored = buildGeometry(parsePattern("1: [red] 2 sc, [blue] 2 sc in mr\n2: 2 sc, [beige] 2 sc"));
+  assert.deepEqual(colored.points.map(({ color: _, ...p }) => p), plain.points.map(({ color: _, ...p }) => p));
+  assert.deepEqual(colored.links.map(({ color: _, ...l }) => l), plain.links.map(({ color: _, ...l }) => l));
+  assert.equal(new Set(colored.points.map((p) => p.color)).size, 3);
+  // Construction links use the new stitch's color. The separate foundation
+  // closing link uses the first stitch's color as it returns to the ring start.
+  for (const link of colored.links.filter((l) => l.kind === "parent" || l.to === l.from + 1)) {
+    assert.equal(link.color, colored.points.find((p) => p.id === link.to)!.color);
+  }
+  const closure = colored.links.find((l) => l.kind === "course" && l.from === 0 && l.to === 3)!;
+  assert.equal(closure.color, colored.points[0].color);
+});
