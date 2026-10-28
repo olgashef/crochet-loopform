@@ -48,7 +48,7 @@ export const STITCH_APPEARANCES: Record<StitchType, StitchAppearance> = {
   bobble: {
     label: "Bobble stitch",
     abbreviation: "BBL",
-    scale: [1.6, 1.45, 1.9],
+    scale: [3.2, 2.9, 3.8],
     description: "A raised, three-lobed cluster of double-crochet loops closed together; counts as one stitch.",
   },
   ch: {

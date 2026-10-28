@@ -62,7 +62,7 @@ export function buildStitchFrames(
       rotation.setFromRotationMatrix(new Matrix4().makeBasis(tangent, up, outward));
       // Keep the cluster embedded at its base while projecting beyond the
       // surrounding SC beads instead of making the whole course taller.
-      position.addScaledVector(outward, radius * 0.9);
+      position.addScaledVector(outward, radius * 1.8);
     }
     if (placePosts && span > 1e-6 && ["hdc", "dc", "tr"].includes(point.type)) {
       // A tall stitch is a body on its parent connection, not a bead balanced

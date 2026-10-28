@@ -25,7 +25,11 @@ export function StitchLegend({ types }: StitchLegendProps) {
           const title = `${appearance.label}: ${appearance.description}`;
           return (
             <li key={type} title={title} aria-label={title}>
-              <span className="stitch-legend-glyph-space" aria-hidden="true">
+              <span
+                className="stitch-legend-glyph-space"
+                aria-hidden="true"
+                style={{ width: Math.max(18, 12 * appearance.scale[0]) }}
+              >
                 <span
                   className={`stitch-legend-glyph${type === "bobble" ? " stitch-legend-bobble" : ""}`}
                   style={{
