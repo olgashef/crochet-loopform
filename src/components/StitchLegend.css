@@ -68,6 +68,14 @@
   white-space: nowrap;
 }
 
+.stitch-legend-bobble {
+  border-radius: 42%;
+  background:
+    radial-gradient(ellipse at 25% 40%, #d5dec7 7%, #8fa777 35%, transparent 40%),
+    radial-gradient(ellipse at 75% 40%, #d5dec7 7%, #8fa777 35%, transparent 40%),
+    radial-gradient(ellipse at 50% 65%, #d5dec7, #9aaf84 54%, #72885e);
+}
+
 @media (max-width: 1150px) {
   .stitch-legend {
     gap: 17px;

@@ -1,8 +1,45 @@
 import { Box3, MathUtils, Vector3 } from "three";
+import type { ModelGeometry, Position } from "./geometry";
 
 export interface ViewFrame {
   distance: number;
   target: Vector3;
+}
+
+/** Start branched models side-on so their longest appendage is visible. */
+export function initialModelView(
+  model: ModelGeometry | null,
+  eyeNormals: Position[] = [],
+): Vector3 {
+  const fallback = new Vector3(0.95, 0.36, 1.55).normalize();
+  if (!model) return fallback;
+  const points = new Map(model.points.map((point) => [point.id, point]));
+  let longest = new Vector3();
+  for (const point of model.points) {
+    if (!point.branch || point.branch.returning) continue;
+    const anchor = points.get(point.branch.anchor);
+    if (!anchor) continue;
+    const direction = new Vector3(
+      point.position[0] - anchor.position[0],
+      0,
+      point.position[2] - anchor.position[2],
+    );
+    if (direction.lengthSq() > longest.lengthSq()) longest = direction;
+  }
+  if (longest.lengthSq() < 1e-12) return fallback;
+
+  const direction = new Vector3(-longest.z, 0, longest.x).normalize();
+  const facing = new Vector3();
+  for (const normal of eyeNormals) {
+    if (normal.every(Number.isFinite)) facing.add(new Vector3(normal[0], 0, normal[2]));
+  }
+  if (facing.lengthSq() < 1e-12) facing.set(0, 0, 1);
+  let alignment = direction.dot(facing);
+  // A front-facing tie has no preferred side; keep a deterministic +z/+x view.
+  if (Math.abs(alignment) < 1e-12) alignment = direction.z || direction.x;
+  if (alignment < 0) direction.negate();
+  direction.y = 0.36;
+  return direction.normalize();
 }
 
 /** Fits a box to the usable perspective frustum, including near-side corners. */

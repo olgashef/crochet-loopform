@@ -4,6 +4,8 @@ import { Vector3 } from "three";
 import { buildGeometry, type ModelPoint } from "./geometry";
 import { EXAMPLES, parsePattern } from "./pattern";
 import { buildStitchFrames } from "./stitchFrame";
+import { createBobbleGeometry } from "./bobbleGeometry";
+import { getStitchAppearance } from "./stitchAppearance";
 
 test("tall beads follow actual parent connections on the curved reference model", () => {
   const model = buildGeometry(
@@ -133,4 +135,48 @@ test("tall stitch bodies sit on the connection below their row anchor at every d
         .get(point.id)!
         .position.distanceTo(new Vector3().fromArray(point.position)) < 1e-10,
     );
+});
+
+test("bobble clusters protrude outward from the body, independently of external chain bounds", () => {
+  const point = (id: number, x: number, z: number): ModelPoint => ({
+    id, round: 3, index: id, position: [x, 0, z], type: id === 0 ? "bobble" : "sc",
+    color: "#d89455", parents: [], previous: null, isIncrease: false,
+  });
+  const body = [point(0, 2, 0), point(1, 0, 2), point(2, -2, 0), point(3, 0, -2)];
+  const frames = buildStitchFrames(body);
+  const bobble = frames.get(0)!;
+  assert.ok(bobble.position.x > body[0].position[0]);
+  assert.ok(new Vector3(0, 0, 1).applyQuaternion(bobble.rotation).distanceTo(new Vector3(1, 0, 0)) < 1e-10);
+  assert.deepEqual(frames.get(1)!.position.toArray(), body[1].position);
+  assert.ok(bobble.scale.z > frames.get(1)!.scale.z);
+  assert.equal(getStitchAppearance("bobble").abbreviation, "BBL");
+
+  const translation = new Vector3(10, 3, -7);
+  const moved = body.map((p) => ({ ...p, position: new Vector3().fromArray(p.position).add(translation).toArray() as [number, number, number] }));
+  const branch = point(4, 100, 0) as ModelPoint & { branch: { anchor: number; step: number; length: number; returning: boolean } };
+  branch.branch = { anchor: 0, step: 1, length: 1, returning: false };
+  const shifted = buildStitchFrames([...moved, branch]).get(0)!;
+  assert.ok(shifted.position.distanceTo(bobble.position.clone().add(translation)) < 1e-10);
+  assert.ok(shifted.rotation.angleTo(bobble.rotation) < 1e-10);
+  const structure = buildStitchFrames(body, 0.062, false).get(0)!;
+  assert.deepEqual(structure.position.toArray(), body[0].position);
+});
+
+test("closed bobble surface has three grooves and fits its conservative selection bounds", () => {
+  const geometry = createBobbleGeometry();
+  const positions = geometry.getAttribute("position");
+  let narrow = 0;
+  let full = 0;
+  for (let index = 0; index < positions.count; index++) {
+    const sample = new Vector3().fromBufferAttribute(positions, index);
+    assert.ok(sample.length() <= 1 + 1e-6);
+    if (Math.abs(sample.y) < 1e-6) {
+      if (sample.length() < 0.8) narrow++;
+      if (sample.length() > 0.99) full++;
+    }
+  }
+  assert.ok(narrow >= 3 && full >= 3, "bobble must have repeated lobes, not a smooth SC sphere");
+  assert.ok(geometry.getAttribute("normal").array.every(Number.isFinite));
+  assert.ok(geometry.boundingSphere!.radius <= 1 + 1e-6);
+  geometry.dispose();
 });

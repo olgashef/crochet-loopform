@@ -1,4 +1,4 @@
-import { analyzeInstruction, readRoundLine } from "./pattern";
+import { analyzeInstruction, readRoundLine, type Operation } from "./pattern";
 
 export function stripWrittenCount(text: string) {
   return text.replace(/\s*\(\d+\)\s*(?=\/\/|$)/, "");
@@ -138,10 +138,14 @@ export function csvPattern(source: string) {
       // A grouped row may inherit the previous repetition's final color.
       // After two passes the color state and set of used yarns are stable.
       for (let pass = 0; pass < Math.min(2, summary.repeatRounds ?? 1); pass++) {
-        for (const operation of summary.operations) {
-          if (typeof operation === "string") used.add(yarn);
-          else yarn = operation.name;
-        }
+        const visit = (operations: Operation[]) => {
+          for (const operation of operations) {
+            if (typeof operation === "string" || "branch" in operation) used.add(yarn);
+            else if ("same" in operation) visit(operation.same);
+            else yarn = operation.name;
+          }
+        };
+        visit(summary.operations);
       }
       rowYarns = [...used].join("; ");
     } catch {

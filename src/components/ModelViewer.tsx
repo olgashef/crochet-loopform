@@ -11,7 +11,9 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { ModelGeometry } from "../lib/geometry";
 import { getStitchAppearance } from "../lib/stitchAppearance";
 import { buildStitchFrames } from "../lib/stitchFrame";
-import { frameModelBounds } from "../lib/viewFraming";
+import { createBobbleGeometry } from "../lib/bobbleGeometry";
+import { buildSafetyEyes, type SafetyEyePair } from "../lib/safetyEyes";
+import { frameModelBounds, initialModelView } from "../lib/viewFraming";
 import "./ModelViewer.css";
 import { RowManipulator } from "./RowManipulator";
 import { offsetRows, type RowOffsets } from "../lib/rowOffsets";
@@ -26,6 +28,7 @@ export interface ViewerHandle {
 
 export interface ViewerProps {
   model: ModelGeometry | null;
+  safetyEyes: SafetyEyePair[];
   rowOffsets: RowOffsets;
   moveRows: boolean;
   selectedRow: number | null;
@@ -49,6 +52,8 @@ interface ViewerRuntime {
   controls: OrbitControls;
   group: THREE.Group;
   nodes: THREE.InstancedMesh | null;
+  bobbles: THREE.InstancedMesh | null;
+  bobblePoints: Point[];
   activePoints: Point[];
   marker: THREE.Mesh;
   selectionScale: THREE.Vector3;
@@ -119,6 +124,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
   function ModelViewer(
     {
       model: baseModel,
+      safetyEyes,
       visibleRounds,
       thickness,
       mode,
@@ -138,6 +144,12 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       () => (baseModel ? offsetRows(baseModel, rowOffsets) : null),
       [baseModel, rowOffsets],
     );
+    const eyePlacements = useMemo(
+      () => model ? buildSafetyEyes(model, safetyEyes) : [],
+      [model, safetyEyes],
+    );
+    const eyesRef = useRef(eyePlacements);
+    eyesRef.current = eyePlacements;
     const rowCallbacks = useRef({
       onSelectRow,
       onRowMove,
@@ -305,6 +317,12 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
           bounds.expandByPoint(center.clone().sub(extent));
           bounds.expandByPoint(center.add(extent));
         }
+        for (const eye of eyesRef.current) {
+          const center = new THREE.Vector3().fromArray(eye.position);
+          const extent = new THREE.Vector3().setScalar(eye.size / 2);
+          bounds.expandByPoint(center.clone().sub(extent));
+          bounds.expandByPoint(center.add(extent));
+        }
         return bounds.isEmpty()
           ? new THREE.Box3(
               new THREE.Vector3(-2, -2, -2),
@@ -314,7 +332,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       };
 
       const reset = (
-        direction = new THREE.Vector3(0.95, 0.36, 1.55).normalize(),
+        direction = initialModelView(modelRef.current, eyesRef.current.map((eye) => eye.normal)),
       ) => {
         const frame = frameModelBounds(
           renderedBounds(),
@@ -341,6 +359,8 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         controls,
         group,
         nodes: null,
+        bobbles: null,
+        bobblePoints: [],
         activePoints: [],
         marker,
         selectionScale: new THREE.Vector3(1, 1, 1),
@@ -418,10 +438,13 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
           -((event.clientY - rect.top) / rect.height) * 2 + 1,
         );
         raycaster.setFromCamera(pointer, camera);
-        const hit = raycaster.intersectObject(current.nodes, false)[0];
+        const hit = raycaster.intersectObjects(
+          current.bobbles ? [current.nodes, current.bobbles] : [current.nodes],
+          false,
+        )[0];
         return hit?.instanceId === undefined
           ? null
-          : current.activePoints[hit.instanceId];
+          : (hit.object === current.bobbles ? current.bobblePoints : current.activePoints)[hit.instanceId];
       };
 
       let down: [number, number] | null = null;
@@ -533,6 +556,8 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       disposeGroup(current.group);
       current.group.clear();
       current.nodes = null;
+      current.bobbles = null;
+      current.bobblePoints = [];
       current.activePoints = [];
       current.marker.visible = false;
       setHover(null);
@@ -564,6 +589,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         const frame = frames.get(point.id)!;
         transform.position.copy(frame.position);
         transform.scale.copy(frame.scale);
+        if (point.type === "bobble" && mode === "stitches") transform.scale.multiplyScalar(0.5);
         transform.quaternion.copy(frame.rotation);
         transform.updateMatrix();
         nodes.setMatrixAt(index, transform.matrix);
@@ -574,6 +600,59 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       nodes.computeBoundingSphere();
       current.nodes = nodes;
       current.group.add(nodes);
+
+      if (mode === "stitches") {
+        const bobblePoints = active.filter((point) => point.type === "bobble");
+        if (bobblePoints.length) {
+          const bobbles = new THREE.InstancedMesh(
+            createBobbleGeometry(nodeRadius),
+            nodeMaterial,
+            bobblePoints.length,
+          );
+          bobblePoints.forEach((point, index) => {
+            const frame = frames.get(point.id)!;
+            transform.position.copy(frame.position);
+            transform.scale.copy(frame.scale);
+            transform.quaternion.copy(frame.rotation);
+            transform.updateMatrix();
+            bobbles.setMatrixAt(index, transform.matrix);
+            bobbles.setColorAt(index, color.set(point.color));
+          });
+          bobbles.instanceMatrix.needsUpdate = true;
+          if (bobbles.instanceColor) bobbles.instanceColor.needsUpdate = true;
+          bobbles.computeBoundingSphere();
+          current.bobbles = bobbles;
+          current.bobblePoints = bobblePoints;
+          current.group.add(bobbles);
+        }
+      }
+
+      const visibleEyes = eyePlacements.filter((eye) => eye.upperRound <= visibleRounds);
+      if (visibleEyes.length) {
+        const eyeGeometry = new THREE.SphereGeometry(1, 24, 16);
+        const eyeMaterial = new THREE.MeshPhysicalMaterial({
+          color: "#080a09", roughness: 0.13, clearcoat: 1, clearcoatRoughness: 0.08,
+        });
+        const highlightGeometry = new THREE.SphereGeometry(1, 10, 8);
+        const highlightMaterial = new THREE.MeshBasicMaterial({ color: "#ffffff" });
+        for (const eye of visibleEyes) {
+          const pupil = new THREE.Mesh(eyeGeometry, eyeMaterial);
+          pupil.position.fromArray(eye.position);
+          pupil.quaternion.setFromUnitVectors(
+            new THREE.Vector3(0, 0, 1), new THREE.Vector3().fromArray(eye.normal),
+          );
+          pupil.scale.set(eye.size / 2, eye.size / 2, eye.size * 0.28);
+          const highlight = new THREE.Mesh(highlightGeometry, highlightMaterial);
+          highlight.position.set(-0.24, 0.28, 0.9);
+          highlight.scale.setScalar(0.12);
+          pupil.add(highlight);
+          current.group.add(pupil);
+        }
+      }
+      current.renderer.domElement.setAttribute(
+        "aria-label",
+        `Interactive crochet model. ${active.filter((p) => p.type === "bobble").length} bobble stitches, ${active.filter((p) => p.branch).length} branch stitches, ${visibleEyes.length} safety eyes. Drag to rotate, scroll to zoom, or click a stitch to inspect it.`,
+      );
 
       const links = model.links.filter(
         (link) => pointMap.has(link.from) && pointMap.has(link.to),
@@ -639,7 +718,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         current.reset();
         lastModel.current = baseModel;
       }
-    }, [model, baseModel, frames, visibleRounds, thickness, mode]);
+    }, [model, baseModel, frames, eyePlacements, visibleRounds, thickness, mode]);
 
     useEffect(() => {
       setHover(null);

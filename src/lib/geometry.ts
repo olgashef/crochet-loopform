@@ -12,6 +12,7 @@ export interface ModelPoint {
   parents: number[];
   previous: number | null;
   isIncrease: boolean;
+  branch?: Stitch["branch"];
 }
 
 export interface ModelLink {
@@ -47,6 +48,7 @@ const HEIGHT: Record<StitchType, number> = {
   ch: 0.75,
   slst: 0.45,
   dec: 1,
+  bobble: 1,
 };
 
 const wrapAngle = (angle: number) =>
@@ -210,6 +212,44 @@ export function buildGeometry(pattern: ParsedPattern): ModelGeometry {
     previousRadius = radius;
     previousHeight = materialHeight;
   }
+
+  // Branch stitches are laid out after the body so that their length never
+  // changes a round's circumference, parent count, or vertical profile.
+  // Work out from the attachment, then return beside the chain rather than
+  // wrapping those stitches into the body's circular course.
+  for (const stitch of pattern.stitches) {
+    if (!stitch.branch) continue;
+    const branch = stitch.branch;
+    const anchor = byId.get(branch.anchor);
+    if (!anchor) continue;
+    const radialLength = Math.hypot(anchor.position[0], anchor.position[2]);
+    const outwardX = radialLength > 1e-8 ? anchor.position[0] / radialLength : 1;
+    const outwardZ = radialLength > 1e-8 ? anchor.position[2] / radialLength : 0;
+    const distance = branch.step * STITCH_WIDTH * 0.72;
+    const bend = 0.22 * Math.sin((branch.step / branch.length) * Math.PI);
+    const side = bend + (branch.returning ? 0.16 : 0);
+    const point: ModelPoint = {
+      id: stitch.id,
+      round: stitch.round,
+      index: stitch.index,
+      color: stitch.color,
+      type: stitch.type,
+      parents: [...stitch.parents],
+      previous: stitch.previous,
+      isIncrease: stitch.isIncrease,
+      branch: { ...branch },
+      position: [
+        anchor.position[0] + outwardX * distance - outwardZ * side,
+        anchor.position[1] + distance * 0.12 + (branch.returning ? 0.08 : 0),
+        anchor.position[2] + outwardZ * distance + outwardX * side,
+      ],
+    };
+    points.push(point);
+    byId.set(point.id, point);
+  }
+  // Keep rendering, picking, and playback in construction order even though
+  // body and branch positions were computed in separate passes.
+  points.sort((a, b) => a.id - b.id);
 
   const edgeKeys = new Set<string>();
   const addLink = (

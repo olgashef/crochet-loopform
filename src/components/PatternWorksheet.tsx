@@ -316,6 +316,10 @@ export function PatternWorksheet({
         <small>
           Change color within a round: <code>[red] 4 sc, [beige] 4 sc</code>.
         </small>
+        <small>
+          Raised stitch: <code>bobble</code>. Shared stitch: <code>[bobble, sc] in same st</code>.
+          Tail: <code>branch(12 ch, 11 slst)</code>.
+        </small>
         <button
           onClick={() => {
             const after = lastActive.current

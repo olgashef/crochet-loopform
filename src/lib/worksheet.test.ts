@@ -182,3 +182,20 @@ test("worksheet paste is bounded before large row lists are rendered", () => {
     "Rnd 1: 7 sc in mr",
   );
 });
+
+
+test("written and CSV exports preserve bobbles, same-parent groups, eyes and chain branches", () => {
+  const source = EXAMPLES.find(e => e.id === "orange-critter")!.source;
+  const exported = writtenPattern(source);
+  const before = parsePattern(source);
+  const after = parsePattern(exported);
+  assert.deepEqual(after.diagnostics, []);
+  assert.deepEqual(after.stitches, before.stitches);
+  assert.deepEqual(after.eyes, before.eyes);
+  const csv = csvPattern(source);
+  assert.ok(csv.includes('"Rnd 27","branch(12 ch, 11 slst), 24 sc","24","orange",""'));
+  assert.ok(csv.includes("[bobble, sc] in same st"));
+  assert.ok(csv.includes("eyes between 5 and 6 at 10, 14 size 0.8"));
+  const mixed = csvPattern("[red]\n1: 4 sc in mr\n2: [[blue] bobble, [white] sc] in same st, [orange] branch(3 ch, 2 slst), 3 sc");
+  assert.ok(mixed.includes('"5","blue; white; orange"'));
+});

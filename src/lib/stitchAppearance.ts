@@ -13,6 +13,7 @@ export const STITCH_TYPE_ORDER: StitchType[] = [
   "hdc",
   "dc",
   "tr",
+  "bobble",
   "ch",
   "slst",
   "dec",
@@ -43,6 +44,12 @@ export const STITCH_APPEARANCES: Record<StitchType, StitchAppearance> = {
     abbreviation: "TR",
     scale: [0.78, 3.1, 0.78],
     description: "The tallest bead, taller than double crochet.",
+  },
+  bobble: {
+    label: "Bobble stitch",
+    abbreviation: "BBL",
+    scale: [1.6, 1.45, 1.9],
+    description: "A raised, three-lobed cluster of double-crochet loops closed together; counts as one stitch.",
   },
   ch: {
     label: "Chain",

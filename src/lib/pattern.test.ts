@@ -159,7 +159,7 @@ test("both under-consumption and over-consumption identify the affected round", 
 });
 
 test("unsupported stitches and unmatched groups fail clearly", () => {
-  assert.match(errors("1: 6 bobble in mc (6)")[0].message, /Unknown stitch/);
+  assert.match(errors("1: 6 puff in mc (6)")[0].message, /Unknown stitch/);
   assert.match(
     errors("1: [6 sc in mc (6)")[0].message,
     /Unknown stitch|missing/,
@@ -231,4 +231,69 @@ test("object prototype names cannot masquerade as stitches or yarn colors", () =
     errors("[__proto__]\n1: 6 sc in mc (6)")[0].message,
     /Unknown yarn color/,
   );
+});
+
+
+test("bobble stitches are individual outputs with shared-parent same-stitch groups", () => {
+  const result = parsePattern("1: 4 sc in mr\n2: [bobble, sc] in same st, sc, [sc, bbl] in same st, sc (6)");
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.rounds[1].inputCount, 4);
+  assert.equal(result.rounds[1].outputCount, 6);
+  assert.deepEqual(result.rounds[1].stitches.map(s => s.type), ["bobble", "sc", "sc", "sc", "bobble", "sc"]);
+  assert.deepEqual(result.rounds[1].stitches.map(s => s.parents), [[0], [0], [1], [2], [2], [3]]);
+  assert.ok(result.rounds[1].stitches.every(s => !s.isIncrease));
+  const repeat = parsePattern("1: 4 sc in mr\n2: [[bobble, sc] in same st] × 4 (8)");
+  assert.deepEqual(repeat.diagnostics, []);
+  assert.equal(repeat.rounds[1].stitches.filter(s => s.type === "bobble").length, 4);
+});
+
+test("chain branches consume no body stitches and return on the chain's actual parents", () => {
+  const result = parsePattern("1: 6 sc in mr\n2: branch(12 ch, 11 slst), 6 sc (6)\n3: 6 sc (6)");
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.rounds[1].stitches.length, 6);
+  assert.equal(result.stitches.length, 41);
+  const branch = result.stitches.filter(s => s.branch);
+  assert.equal(branch.length, 23);
+  assert.equal(branch[0].branch!.anchor, 5);
+  assert.deepEqual(branch[0].parents, [5]);
+  assert.equal(branch[0].previous, 5);
+  assert.equal(branch[12].branch!.step, 11);
+  assert.deepEqual(branch[12].parents, [branch[10].id]);
+  assert.deepEqual(branch.at(-1)!.parents, [branch[0].id]);
+  assert.equal(result.rounds[1].stitches[0].previous, branch.at(-1)!.id);
+  assert.deepEqual(result.rounds[2].stitches.map(s => s.parents[0]), result.rounds[1].stitches.map(s => s.id));
+  assert.ok(result.stitches.every((s, i) => s.id === i && s.parents.every(p => p < s.id)));
+});
+
+test("open and multiple branches anchor to the preceding body stitch and resume body construction", () => {
+  const result = parsePattern("1: 4 sc in mr\n2: sc, branch(3 ch), sc, branch(4 ch, 3 slst), 2 sc\n3: 4 sc, branch(2 ch)\n4: 4 sc");
+  assert.deepEqual(result.diagnostics, []);
+  const round2 = result.rounds[1].stitches;
+  assert.equal(result.stitches.find(s => s.branch)?.branch!.anchor, round2[0].id);
+  assert.equal(round2[1].previous, round2[0].id);
+  assert.equal(result.rounds[3].stitches[0].previous, result.rounds[2].stitches.at(-1)!.id);
+  assert.equal(result.stitches.filter(s => s.branch && !s.branch.returning && s.branch.step === 1).length, 3);
+});
+
+test("invalid branches and same-stitch groups keep the invalid round out of the model", () => {
+  for (const body of ["branch(12 ch, 10 slst), 4 sc", "branch(0 ch), 4 sc", "branch(4 sc), 4 sc", "branch(3 ch, 2 slst, 4 sc", "[dec, sc] in same st, 3 sc", "[ch, sc] in same st, 3 sc", "[inc, sc] in same st, 3 sc"]) {
+    const result = parsePattern(`1: 4 sc in mr\n2: ${body}`);
+    assert.equal(result.rounds.length, 1, body);
+    assert.equal(result.stitches.length, 4, body);
+    assert.equal(result.diagnostics[0].line, 2, body);
+  }
+  assert.match(errors("1: branch(3 ch), 4 sc in mr")[0].message, /existing body stitch/);
+  assert.match(errors("1: 4 sc in mr\n2: branch(8000 ch, 7999 slst), 4 sc")[0].message, /too large/);
+});
+
+test("the orange critter example preserves its 30 body rounds, two bobbles, eyes and 23 tail stitches", () => {
+  const result = parsePattern(EXAMPLES.find(e => e.id === "orange-critter")!.source);
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.rounds.length, 30);
+  assert.equal(result.stitches.filter(s => s.type === "bobble").length, 2);
+  assert.equal(result.stitches.filter(s => s.branch).length, 23);
+  assert.equal(result.rounds[26].outputCount, 24);
+  assert.equal(result.rounds[27].inputCount, 24);
+  assert.equal(result.eyes.length, 1);
+  assert.deepEqual(result.eyes[0].stitches, [10, 14]);
 });

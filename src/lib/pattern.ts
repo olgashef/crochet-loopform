@@ -1,4 +1,6 @@
-export type StitchType = "sc" | "hdc" | "dc" | "tr" | "ch" | "slst" | "dec";
+import { parseEyeDirective, validateEyePair, type SafetyEyePair } from "./safetyEyes";
+
+export type StitchType = "sc" | "hdc" | "dc" | "tr" | "ch" | "slst" | "dec" | "bobble";
 
 export interface Stitch {
   id: number;
@@ -10,6 +12,7 @@ export interface Stitch {
   previous: number | null;
   sourceLine: number;
   isIncrease: boolean;
+  branch?: { anchor: number; step: number; length: number; returning: boolean };
 }
 
 export interface PatternRound {
@@ -32,6 +35,7 @@ export interface Diagnostic {
 }
 
 export interface ParsedPattern {
+  eyes: SafetyEyePair[];
   rounds: PatternRound[];
   stitches: Stitch[];
   diagnostics: Diagnostic[];
@@ -92,6 +96,8 @@ const STITCH_ALIASES: Readonly<Record<string, StitchType | "inc">> = {
   increase: "inc",
   dec: "dec",
   decrease: "dec",
+  bobble: "bobble",
+  bbl: "bobble",
 };
 
 export function resolveYarnColor(name: string): string | null {
@@ -112,7 +118,26 @@ function yarnColor(name: string) {
   return color;
 }
 
-type Operation = StitchType | "inc" | { color: string; name: string };
+export type Operation =
+  | StitchType
+  | "inc"
+  | { color: string; name: string }
+  | { same: Operation[] }
+  | { branch: { chain: number; slip: number } };
+
+function operationCounts(op: Operation): { input: number; output: number; total: number } {
+  if (typeof op === "string") return {
+    input: op === "ch" ? 0 : op === "dec" ? 2 : 1,
+    output: op === "inc" ? 2 : 1,
+    total: op === "inc" ? 2 : 1,
+  };
+  if ("same" in op) {
+    const total = op.same.reduce((n, child) => n + operationCounts(child).output, 0);
+    return { input: 1, output: total, total };
+  }
+  if ("branch" in op) return { input: 0, output: 0, total: op.branch.chain + op.branch.slip };
+  return { input: 0, output: 0, total: 0 };
+}
 interface Token {
   value: string;
   position: number;
@@ -139,7 +164,7 @@ function tokenize(source: string): Token[] {
       position += color[0].length;
       continue;
     }
-    const token = /^(?:\d+|[a-z]+|[\[\],*×])/i.exec(rest);
+    const token = /^(?:\d+|[a-z]+|[\[\](),*×])/i.exec(rest);
     if (!token) {
       throw new PatternSyntaxError(
         `Unexpected “${rest[0]}” near column ${position + 1}. Use stitches such as sc, inc, dec or [sc, inc] rep 6 times.`,
@@ -200,6 +225,27 @@ function parseOperations(source: string): Operation[] {
         cursor++;
         continue;
       }
+      if (tokens[cursor].value === "branch") {
+        cursor++;
+        if (tokens[cursor++]?.value !== "(")
+          throw new PatternSyntaxError("Use branch(12 ch, 11 slst) for a chain out and return.");
+        const chain = readCount();
+        if (!["ch", "chain"].includes(tokens[cursor++]?.value ?? ""))
+          throw new PatternSyntaxError("A branch starts with a chain count, for example branch(12 ch, 11 slst).");
+        let slip = 0;
+        if (tokens[cursor]?.value === ",") {
+          cursor++;
+          slip = readCount();
+          if (!["slst", "ss"].includes(tokens[cursor++]?.value ?? ""))
+            throw new PatternSyntaxError("Return along a branch with slip stitches, for example branch(12 ch, 11 slst).");
+          if (slip !== chain - 1)
+            throw new PatternSyntaxError("A returning branch starts in the second chain from the hook: use one fewer slip stitch than chains.");
+        }
+        if (tokens[cursor++]?.value !== ")")
+          throw new PatternSyntaxError("A branch is missing its closing ).");
+        append(result, { operations: [{ branch: { chain, slip } }], stitchCount: chain + slip }, 1);
+        continue;
+      }
       if (tokens[cursor].color) {
         const name = tokens[cursor++].value;
         append(
@@ -217,6 +263,15 @@ function parseOperations(source: string): Operation[] {
         cursor++;
         if (!group.stitchCount)
           throw new PatternSyntaxError("A repeat group cannot be empty.");
+        let operations = group.operations;
+        if (tokens[cursor]?.value === "in") {
+          cursor++;
+          if (tokens[cursor++]?.value !== "same" || !["st", "stitch"].includes(tokens[cursor++]?.value ?? ""))
+            throw new PatternSyntaxError("Use [bobble, sc] in same st to work multiple stitches into one parent.");
+          if (operations.some((op) => typeof op === "string" ? ["dec", "ch", "inc"].includes(op) : !("color" in op)))
+            throw new PatternSyntaxError("A same-stitch group supports ordinary stitches, bobbles and color changes; no chains, decreases, increases or branches.");
+          operations = [{ same: operations }];
+        }
         let repetitions = 1;
         if (
           ["rep", "repeat", "x", "*", "×"].includes(tokens[cursor]?.value ?? "")
@@ -225,7 +280,7 @@ function parseOperations(source: string): Operation[] {
           repetitions = readCount();
           if (["time", "times"].includes(tokens[cursor]?.value ?? "")) cursor++;
         }
-        append(result, group, repetitions);
+        append(result, { operations, stitchCount: group.stitchCount }, repetitions);
         continue;
       }
       let count = 1;
@@ -241,7 +296,7 @@ function parseOperations(source: string): Operation[] {
           : undefined;
       if (!operation)
         throw new PatternSyntaxError(
-          `Unknown stitch “${token.value}”. Supported: sc, hdc, dc, tr, ch, slst, inc and dec.`,
+          `Unknown stitch “${token.value}”. Supported: sc, hdc, dc, tr, bobble, ch, slst, inc and dec.`,
         );
       append(result, { operations: [operation], stitchCount: 1 }, count);
     }
@@ -251,8 +306,8 @@ function parseOperations(source: string): Operation[] {
   const group = sequence(0);
   if (cursor < tokens.length)
     throw new PatternSyntaxError("There is a closing ] without a matching [.");
-  if (!group.stitchCount)
-    throw new PatternSyntaxError("This round has no stitches yet.");
+  if (!group.operations.some((op) => operationCounts(op).output > 0))
+    throw new PatternSyntaxError("This round has no stitches yet. Add body stitches after any branch.");
   return group.operations;
 }
 
@@ -303,15 +358,9 @@ export function analyzeInstruction(text: string) {
     foundation,
     declaredCount,
     repeatRounds,
-    inputCount: operations.reduce(
-      (n, op) =>
-        n + (typeof op !== "string" || op === "ch" ? 0 : op === "dec" ? 2 : 1),
-      0,
-    ),
-    outputCount: operations.reduce(
-      (n, op) => n + (typeof op !== "string" ? 0 : op === "inc" ? 2 : 1),
-      0,
-    ),
+    inputCount: operations.reduce((n, op) => n + operationCounts(op).input, 0),
+    outputCount: operations.reduce((n, op) => n + operationCounts(op).output, 0),
+    totalCount: operations.reduce((n, op) => n + operationCounts(op).total, 0),
   };
 }
 
@@ -324,12 +373,14 @@ export function analyzeInstruction(text: string) {
 export function parsePattern(source: string): ParsedPattern {
   const parsed: ParsedPattern = {
     rounds: [],
+    eyes: [],
     stitches: [],
     diagnostics: [],
     name: "Untitled pattern",
   };
   let color = YARN_COLORS.red;
   let named = false;
+  let coursePrevious: number | null = null;
   const lines = source.split(/\r?\n/);
 
   if (source.length > 120_000) {
@@ -355,6 +406,12 @@ export function parsePattern(source: string): ParsedPattern {
     }
 
     try {
+      const eyes = parseEyeDirective(line, lineNumber);
+      if (eyes) {
+        if (parsed.eyes.length >= 16) throw new PatternSyntaxError("Use at most 16 pairs of safety eyes.");
+        parsed.eyes.push(eyes);
+        continue;
+      }
       const directive = /^\[([^\[\]]+)\]$/.exec(line);
       if (
         directive &&
@@ -415,20 +472,14 @@ export function parsePattern(source: string): ParsedPattern {
             "Start with foundation stitches, for example 1: 6 sc in mc (6). Increases and decreases need an existing round.",
           );
 
-        let consumed = 0;
-        let produced = 0;
-        let increases = 0;
-        let decreases = 0;
-        for (const operation of operations) {
-          if (typeof operation !== "string") continue;
-          consumed += operation === "ch" ? 0 : operation === "dec" ? 2 : 1;
-          produced += operation === "inc" ? 2 : 1;
-          if (operation === "inc") increases++;
-          if (operation === "dec") decreases++;
-        }
-        if (parsed.stitches.length + produced > MAX_STITCHES)
+        const consumed = operations.reduce((n, op) => n + operationCounts(op).input, 0);
+        const produced = operations.reduce((n, op) => n + operationCounts(op).output, 0);
+        const totalProduced = operations.reduce((n, op) => n + operationCounts(op).total, 0);
+        const increases = operations.filter((op) => op === "inc").length;
+        const decreases = operations.filter((op) => op === "dec").length;
+        if (parsed.stitches.length + totalProduced > MAX_STITCHES)
           throw new PatternSyntaxError(
-            `This preview supports up to ${MAX_STITCHES.toLocaleString()} stitches. Try a smaller pattern.`,
+            `This preview supports up to ${MAX_STITCHES.toLocaleString()} stitches, including branches. Try a smaller pattern.`,
           );
         if (declaredCount !== null && declaredCount !== produced)
           throw new PatternSyntaxError(
@@ -453,41 +504,63 @@ export function parsePattern(source: string): ParsedPattern {
           line: lineNumber,
         };
         let parentCursor = 0;
-        const firstID = parsed.stitches.length;
+        const created: Stitch[] = [];
+        let previous: number | null = coursePrevious;
+        const create = (type: StitchType, parents: number[], isIncrease = false, branch?: Stitch["branch"]) => {
+          const id = parsed.stitches.length + created.length;
+          const stitch: Stitch = {
+            id, round: roundNumber,
+            index: branch ? branch.step - 1 : round.stitches.length,
+            type, color, parents: [...parents], previous,
+            sourceLine: lineNumber, isIncrease,
+            ...(branch ? { branch } : {}),
+          };
+          created.push(stitch);
+          if (!branch) round.stitches.push(stitch);
+          previous = id;
+          return stitch;
+        };
         for (const operation of operations) {
-          if (typeof operation !== "string") {
+          if (typeof operation !== "string" && "color" in operation) {
             color = operation.color;
             continue;
           }
-          const needed =
-            !parentRound || operation === "ch"
-              ? 0
-              : operation === "dec"
-                ? 2
-                : 1;
-          const parents =
-            parentRound?.stitches
-              .slice(parentCursor, parentCursor + needed)
-              .map((stitch) => stitch.id) ?? [];
+          if (typeof operation !== "string" && "branch" in operation) {
+            const anchor = round.stitches.at(-1) ?? parentRound?.stitches.at(-1);
+            if (!anchor) throw new PatternSyntaxError("A branch needs an existing body stitch to attach to. Work a body stitch before the branch.");
+            const { chain, slip } = operation.branch;
+            previous = anchor.id;
+            const chainStitches: Stitch[] = [];
+            for (let step = 1; step <= chain; step++) {
+              const parent = chainStitches.at(-1)?.id ?? anchor.id;
+              chainStitches.push(create("ch", [parent], false, { anchor: anchor.id, step, length: chain, returning: false }));
+            }
+            for (let step = slip; step >= 1; step--) {
+              create("slst", [chainStitches[step - 1].id], false, { anchor: anchor.id, step, length: chain, returning: true });
+            }
+            if (!slip) previous = anchor.id;
+            continue;
+          }
+          const same = typeof operation !== "string" && "same" in operation ? operation.same : null;
+          if (same && !parentRound)
+            throw new PatternSyntaxError("A same-stitch group needs an existing round to attach to.");
+          const needed = !parentRound || operation === "ch" ? 0 : operation === "dec" ? 2 : 1;
+          const parents = parentRound?.stitches.slice(parentCursor, parentCursor + needed).map((stitch) => stitch.id) ?? [];
           parentCursor += needed;
-          for (let child = 0; child < (operation === "inc" ? 2 : 1); child++) {
-            const id = firstID + round.stitches.length;
-            round.stitches.push({
-              id,
-              round: roundNumber,
-              index: round.stitches.length,
-              type: operation === "inc" ? "sc" : operation,
-              color,
-              parents: [...parents],
-              previous: id ? id - 1 : null,
-              sourceLine: lineNumber,
-              isIncrease: operation === "inc",
-            });
+          if (same) {
+            for (const child of same) {
+              if (typeof child === "string") create(child as StitchType, parents);
+              else if ("color" in child) color = child.color;
+            }
+          } else if (typeof operation === "string") {
+            for (let child = 0; child < (operation === "inc" ? 2 : 1); child++)
+              create(operation === "inc" ? "sc" : operation, parents, operation === "inc");
           }
         }
         round.color = round.stitches[0].color;
         parsed.rounds.push(round);
-        parsed.stitches.push(...round.stitches);
+        parsed.stitches.push(...created);
+        coursePrevious = previous;
         if (roundNumber === 1 && !foundation)
           parsed.diagnostics.push({
             line: lineNumber,
@@ -505,6 +578,11 @@ export function parsePattern(source: string): ParsedPattern {
       });
       break;
     }
+  }
+
+  for (const eyes of parsed.eyes) {
+    const message = validateEyePair(eyes, parsed.rounds);
+    if (message) parsed.diagnostics.push({ line: eyes.line, severity: "error", message });
   }
 
   if (
@@ -636,5 +714,30 @@ Rnd 3: [[red] sc, inc, [beige] sc, inc] × 4 (24)
 Rnd 4–6: [red] 12 sc, [beige] 12 sc for 3 rounds (24)
 Rnd 7: [[red] sc, [beige] sc] × 12 (24)
 Rnd 8: [beige] 24 sc (24)`,
+  },
+  {
+    id: "orange-critter",
+    name: "Orange critter",
+    description: "Two bobble ears, safety eyes, a white belly and a chain tail.",
+    source: `# Orange critter
+[orange]
+Rnd 1: 6 sc in mr (6)
+Rnd 2: 6 inc (12)
+Rnd 3: sc, inc, sc, [bobble, sc] in same st, sc, inc, sc, [sc, bobble] in same st, [sc, inc] × 2 (18)
+Rnd 4: [sc, inc, sc] × 6 (24)
+Rnd 5: 6 sc, inc, 3 sc, [white] sc, [orange] 4 sc, inc, 8 sc (26)
+Rnd 6: 6 sc, dec, 2 sc, [white] 3 sc, [orange] 3 sc, dec, 8 sc (24)
+Rnd 7–8: 8 sc, [white] 5 sc, [orange] 11 sc for 2 rounds (24)
+// The stitch positions are adjustable; there are four stitches between eyes.
+eyes between 5 and 6 at 10, 14 size 0.8
+Rnd 9: 9 sc, [white] 3 sc, [orange] 12 sc (24)
+Rnd 10: 9 sc, [white] 4 sc, [orange] 11 sc (24)
+Rnd 11–26: 8 sc, [white] 6 sc, [orange] 10 sc for 16 rounds (24)
+// Chain out from the body, skip the last chain, then slip-stitch back.
+Rnd 27: branch(12 ch, 11 slst), 24 sc (24)
+// Work round 28 in BLO when crocheting; loop choice is not simulated.
+Rnd 28: [sc, dec, sc] × 6 (18)
+Rnd 29: [sc, dec] × 6 (12)
+Rnd 30: 6 dec (6)`,
   },
 ];

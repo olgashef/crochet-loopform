@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildGeometry } from "./geometry";
 import { parsePattern, EXAMPLES } from "./pattern";
+import { offsetRows } from "./rowOffsets";
 
 test("the reference pattern produces finite, centered geometry and valid links", () => {
   const pattern = parsePattern(EXAMPLES[0].source);
@@ -102,4 +103,68 @@ test("mid-round colors reach preview points and links without changing layout", 
   }
   const closure = colored.links.find((l) => l.kind === "course" && l.from === 0 && l.to === 3)!;
   assert.equal(closure.color, colored.points[0].color);
+});
+
+test("a chain-out and slip-stitch return extend outside the body without widening its rounds", () => {
+  const source = "1: 24 sc in mr\n2: branch(12 ch, 11 slst), 24 sc (24)\n3: 24 sc (24)";
+  const parsed = parsePattern(source);
+  assert.deepEqual(parsed.diagnostics, []);
+  assert.deepEqual(parsed.rounds.map((r) => r.outputCount), [24, 24, 24]);
+  const model = buildGeometry(parsed);
+  const plain = buildGeometry(parsePattern("1: 24 sc in mr\n2: 24 sc\n3: 24 sc"));
+  const branch = model.points.filter((p) => p.branch);
+  assert.equal(branch.length, 23);
+  assert.equal(branch.filter((p) => p.type === "ch").length, 12);
+  assert.equal(branch.filter((p) => p.type === "slst").length, 11);
+  assert.deepEqual(model.roundCenters.map((r) => r.radius), plain.roundCenters.map((r) => r.radius));
+  for (const body of model.points.filter((p) => !p.branch)) {
+    const expected = plain.points.find((p) => p.round === body.round && p.index === body.index)!;
+    const center = model.roundCenters.find((r) => r.round === body.round)!.center;
+    const expectedCenter = plain.roundCenters.find((r) => r.round === body.round)!.center;
+    for (let axis = 0; axis < 3; axis++) {
+      assert.ok(Math.abs((body.position[axis] - center[axis]) - (expected.position[axis] - expectedCenter[axis])) < 1e-10);
+    }
+  }
+  const attachment = model.points.find((p) => p.id === branch[0].branch!.anchor)!;
+  const center = model.roundCenters.find((r) => r.round === attachment.round)!.center;
+  const bodyRadius = Math.hypot(attachment.position[0] - center[0], attachment.position[2] - center[2]);
+  const tip = branch.find((p) => !p.branch!.returning && p.branch!.step === 12)!;
+  assert.ok(Math.hypot(tip.position[0] - center[0], tip.position[2] - center[2]) > bodyRadius + 7);
+  for (const returned of branch.filter((p) => p.branch!.returning)) {
+    const chain = model.points.find((p) => p.id === returned.parents[0])!;
+    assert.equal(chain.type, "ch");
+    assert.equal(chain.branch!.step, returned.branch!.step);
+    const distance = Math.hypot(...returned.position.map((v, axis) => v - chain.position[axis]));
+    assert.ok(distance > 0.1 && distance < 0.3);
+  }
+  const ids = new Set(model.points.map((p) => p.id));
+  assert.ok(model.points.every((p) => p.position.every(Number.isFinite)));
+  assert.ok(model.links.every((l) => ids.has(l.from) && ids.has(l.to)));
+  assert.ok(model.points.every((p, index) => index === 0 || p.id > model.points[index - 1].id));
+  const extent = model.points.reduce((max, p) => Math.max(max, Math.abs(p.position[0]), Math.abs(p.position[2])), 0);
+  assert.ok(Math.max(model.bounds.width, model.bounds.depth) / 2 >= extent - 1e-8);
+});
+
+test("multiple chain branches keep their own attachments and survive row adjustments", () => {
+  const parsed = parsePattern("1: 24 sc in mr\n2: 6 sc, branch(4 ch, 3 slst), 12 sc, branch(6 ch), 6 sc\n3: 24 sc");
+  assert.deepEqual(parsed.diagnostics, []);
+  const model = buildGeometry(parsed);
+  const branches = model.points.filter((p) => p.branch);
+  assert.equal(branches.length, 13);
+  const anchors = new Set(branches.map((p) => p.branch!.anchor));
+  assert.equal(anchors.size, 2);
+  for (const anchorId of anchors) {
+    const anchor = model.points.find((p) => p.id === anchorId)!;
+    assert.equal(anchor.round, 2);
+    const first = branches.find((p) => p.branch!.anchor === anchorId && p.branch!.step === 1 && !p.branch!.returning)!;
+    assert.deepEqual(first.parents, [anchorId]);
+    assert.ok(model.links.some((l) => l.from === anchorId && l.to === first.id));
+  }
+  const moved = offsetRows(model, { 2: 2 });
+  for (const point of branches) {
+    const changed = moved.points.find((p) => p.id === point.id)!;
+    assert.deepEqual(changed.branch, point.branch);
+    assert.deepEqual(changed.parents, point.parents);
+    assert.deepEqual(changed.position, [point.position[0], point.position[1] + 2, point.position[2]]);
+  }
 });

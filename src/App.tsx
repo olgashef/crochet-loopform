@@ -30,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 import { PatternWorksheet } from "./components/PatternWorksheet";
+import { SafetyEyeControls } from "./components/SafetyEyeControls";
 import { csvPattern, writtenPattern } from "./lib/worksheet";
 import { PatternEditor } from "./components/PatternEditor";
 import { ModelViewer, type ViewerHandle } from "./components/ModelViewer";
@@ -82,6 +83,7 @@ const STITCH_NAMES: Record<string, string> = {
   ch: "Chain",
   slst: "Slip stitch",
   dec: "Decrease",
+  bobble: "Bobble stitch",
 };
 
 function readWorkspace(): {
@@ -843,6 +845,7 @@ export default function App() {
               <ModelViewer
                 ref={viewer}
                 model={geometry.points.length ? geometry : null}
+                safetyEyes={compiled.eyes}
                 visibleRounds={currentRound}
                 thickness={thickness}
                 mode={mode}
@@ -1032,7 +1035,7 @@ export default function App() {
                   </strong>
                   <p>
                     Round {selected.round}
-                    <span>·</span>Stitch {selected.index + 1}
+                    <span>·</span>{selected.branch ? `Branch ${selected.branch.returning ? "return" : "chain"} ${selected.branch.step}` : `Stitch ${selected.index + 1}`}
                     <span>·</span>Line {selected.sourceLine}
                   </p>
                   <small>
@@ -1059,6 +1062,12 @@ export default function App() {
               </span>
             </div>
             <StitchLegend types={visibleStitchTypes} />
+            <SafetyEyeControls
+              source={source}
+              pattern={draft}
+              selected={!dirty ? selected : null}
+              onChange={(next) => { setSource(next); setSelectedStitch(null); }}
+            />
             <div className="playback-bar">
               <button
                 className={`play-button ${playing ? "playing" : ""}`}
@@ -1301,6 +1310,7 @@ export default function App() {
                     ["sc", "Single crochet"],
                     ["hdc", "Half double crochet"],
                     ["dc / tr", "Double / treble crochet"],
+                    ["bobble / bbl", "Raised 3-DC bobble"],
                     ["inc", "2 sc into one stitch"],
                     ["dec", "Join 2 stitches into one"],
                     ["in mc", "Magic-ring foundation"],
@@ -1319,6 +1329,17 @@ export default function App() {
                   change, even across rounds. Color changes also work inside
                   repeats. Repeats can be nested. Start comments with{" "}
                   <code>//</code> or <code>#</code>.
+                </p>
+                <p className="guide-note">
+                  Work two stitches into one parent with <code>[bobble, sc] in same st</code>.
+                  Add an external tail with <code>branch(12 ch, 11 slst)</code>;
+                  the chain and return stitches stay outside the body-round total.
+                  Use <code>branch(12 ch)</code> for an open chain extension.
+                </p>
+                <p className="guide-note">
+                  Use the Safety eyes controls below the preview, or write{" "}
+                  <code>eyes between 5 and 6 at 10, 14 size 0.8</code> on its own line.
+                  Eyes sit after the numbered stitches, with four intervening stitches in this example.
                 </p>
                 <div className="guide-shortcut">
                   <kbd>⌘ / Ctrl</kbd>

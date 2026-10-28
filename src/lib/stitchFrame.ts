@@ -18,6 +18,17 @@ export function buildStitchFrames(
   const byId = new Map(points.map((point) => [point.id, point]));
   const frames = new Map<number, StitchFrame>();
   const up = new Vector3(0, 1, 0);
+  // Body-round centers remain reliable when an external chain shifts the
+  // overall model bounds. Branch stitches must not pull bobbles toward a tail.
+  const roundCenters = new Map<number, { sum: Vector3; count: number }>();
+  for (const point of points) {
+    if ("branch" in point && point.branch) continue;
+    const center = roundCenters.get(point.round) ?? { sum: new Vector3(), count: 0 };
+    center.sum.add(new Vector3().fromArray(point.position));
+    center.count++;
+    roundCenters.set(point.round, center);
+  }
+  for (const center of roundCenters.values()) center.sum.divideScalar(center.count);
   for (const point of points) {
     const parents = point.parents
       .map((id) => byId.get(id))
@@ -41,6 +52,18 @@ export function buildStitchFrames(
       getStitchAppearance(point.type).scale,
     );
     const position = new Vector3().fromArray(point.position);
+    if (placePosts && point.type === "bobble") {
+      const center = roundCenters.get(point.round)?.sum;
+      const outward = position.clone().sub(center ?? new Vector3());
+      outward.y = 0;
+      if (outward.lengthSq() < 1e-12) outward.set(0, 0, 1);
+      else outward.normalize();
+      const tangent = new Vector3().crossVectors(up, outward).normalize();
+      rotation.setFromRotationMatrix(new Matrix4().makeBasis(tangent, up, outward));
+      // Keep the cluster embedded at its base while projecting beyond the
+      // surrounding SC beads instead of making the whole course taller.
+      position.addScaledVector(outward, radius * 0.9);
+    }
     if (placePosts && span > 1e-6 && ["hdc", "dc", "tr"].includes(point.type)) {
       // A tall stitch is a body on its parent connection, not a bead balanced
       // on the upper row. Keep its tip at the row anchor and its body below it.
