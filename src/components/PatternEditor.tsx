@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import {
   EditorSelection,
+  Annotation,
+  Transaction,
   EditorState,
   StateEffect,
   StateField,
@@ -89,6 +91,7 @@ const crochetHighlight = HighlightStyle.define([
   { tag: tags.variableName, color: "#616960" },
 ]);
 
+const externalSync = Annotation.define<boolean>();
 const setDiagnostics = StateEffect.define<Diagnostic[]>();
 const setSelectedLine = StateEffect.define<number | null>();
 
@@ -206,15 +209,22 @@ export function PatternEditor({
             indentWithTab,
           ]),
           EditorView.updateListener.of((update) => {
-            if (update.docChanged)
+            if (update.docChanged && !update.transactions.some(t => t.annotation(externalSync)))
               onChangeRef.current(update.state.doc.toString());
           }),
         ],
       }),
     });
 
+    const insert = (event: Event) => {
+      const text = (event as CustomEvent<string>).detail;
+      view.dispatch(view.state.replaceSelection(text));
+      view.focus();
+    };
+    window.addEventListener("loopform:insert", insert);
     editor.current = view;
     return () => {
+      window.removeEventListener("loopform:insert", insert);
       editor.current = null;
       view.destroy();
     };
@@ -225,8 +235,8 @@ export function PatternEditor({
     if (!view || value === view.state.doc.toString()) return;
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: value },
-      selection: EditorSelection.cursor(0),
-      effects: EditorView.scrollIntoView(0),
+      selection: EditorSelection.cursor(Math.min(view.state.selection.main.head, value.length)),
+      annotations: [externalSync.of(true), Transaction.addToHistory.of(false)],
     });
   }, [value]);
 

@@ -1,7 +1,7 @@
 import { analyzeInstruction, readRoundLine, type Operation } from "./pattern";
 
 export function stripWrittenCount(text: string) {
-  return text.replace(/\s*\(\d+\)\s*(?=\/\/|$)/, "");
+  return text.replace(/\s*(?:\(\d+\)|→\s*\d+)\s*(?=\/\/|$)/, "");
 }
 export function worksheetInstruction(line: string) {
   const row = readRoundLine(line);
@@ -142,7 +142,9 @@ export function csvPattern(source: string) {
           for (const operation of operations) {
             if (typeof operation === "string" || "branch" in operation) used.add(yarn);
             else if ("same" in operation) visit(operation.same);
-            else yarn = operation.name;
+            else if ("stitch" in operation) {
+              for (const color of operation.colors) used.add(color ?? yarn);
+            } else yarn = operation.name;
           }
         };
         visit(summary.operations);

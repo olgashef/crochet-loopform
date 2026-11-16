@@ -9,6 +9,9 @@ export interface Stitch {
   index: number;
   type: StitchType;
   color: string;
+  /** Written yarn before a paint directive overrides this stitch. */
+  patternColor?: string;
+  paintSourceLine?: number;
   parents: number[];
   previous: number | null;
   sourceLine: number;
@@ -124,10 +127,12 @@ export type Operation =
   | StitchType
   | "inc"
   | { color: string; name: string }
+  | { stitch: StitchType | "inc"; colors: (string | null)[]; name: string }
   | { same: Operation[] }
   | { branch: { chain: number; slip: number } };
 
 function operationCounts(op: Operation): { input: number; output: number; total: number } {
+  if (typeof op !== "string" && "stitch" in op) return operationCounts(op.stitch);
   if (typeof op === "string") return {
     input: op === "ch" ? 0 : op === "dec" ? 2 : 1,
     output: op === "inc" ? 2 : 1,
@@ -144,6 +149,7 @@ interface Token {
   value: string;
   position: number;
   color?: boolean;
+  colors?: (string | null)[];
 }
 
 class PatternSyntaxError extends Error {}
@@ -164,6 +170,14 @@ function tokenize(source: string): Token[] {
     if (color && !Object.hasOwn(STITCH_ALIASES, color[1].toLowerCase())) {
       tokens.push({ value: color[1].toLowerCase(), position, color: true });
       position += color[0].length;
+      continue;
+    }
+    // Two entries address the individual children of an increase. An empty
+    // entry keeps that child's current yarn, e.g. inc[,#ff8800].
+    const colorPair = /^\[\s*([^\[\],\s]*)\s*,\s*([^\[\],\s]*)\s*\]/i.exec(rest);
+    if (colorPair && [colorPair[1], colorPair[2]].every((name) => !Object.hasOwn(STITCH_ALIASES, name.toLowerCase()))) {
+      tokens.push({ value: colorPair[0], position, colors: colorPair.slice(1).map((name) => name ? yarnColor(name) : null) });
+      position += colorPair[0].length;
       continue;
     }
     const token = /^(?:\d+|[a-z]+|[\[\](),*×])/i.exec(rest);
@@ -222,7 +236,7 @@ function parseOperations(source: string): Operation[] {
         "Repeats are nested too deeply. Use at most 12 levels.",
       );
     const result: Group = { operations: [], stitchCount: 0 };
-    while (cursor < tokens.length && tokens[cursor].value !== "]") {
+    while (cursor < tokens.length && !["]", ")"].includes(tokens[cursor].value)) {
       if (tokens[cursor].value === ",") {
         cursor++;
         continue;
@@ -257,11 +271,16 @@ function parseOperations(source: string): Operation[] {
         );
         continue;
       }
-      if (tokens[cursor].value === "[") {
+      let prefixRepeat = 1;
+      if (/^\d+$/.test(tokens[cursor].value) && ["x", "×", "*"].includes(tokens[cursor+1]?.value ?? "") && ["[", "("].includes(tokens[cursor+2]?.value ?? "")) {
+        prefixRepeat = readCount(); cursor++;
+      }
+      if (["[", "("].includes(tokens[cursor].value)) {
+        const closing = tokens[cursor].value === "[" ? "]" : ")";
         cursor++;
         const group = sequence(depth + 1);
-        if (tokens[cursor]?.value !== "]")
-          throw new PatternSyntaxError("This repeat is missing its closing ].");
+        if (tokens[cursor]?.value !== closing)
+          throw new PatternSyntaxError(`This repeat is missing its closing ${closing}.`);
         cursor++;
         if (!group.stitchCount)
           throw new PatternSyntaxError("A repeat group cannot be empty.");
@@ -270,23 +289,26 @@ function parseOperations(source: string): Operation[] {
           cursor++;
           if (tokens[cursor++]?.value !== "same" || !["st", "stitch"].includes(tokens[cursor++]?.value ?? ""))
             throw new PatternSyntaxError("Use [bobble, sc] in same st to work multiple stitches into one parent.");
-          if (operations.some((op) => typeof op === "string" ? ["dec", "ch", "inc"].includes(op) : !("color" in op)))
+          if (operations.some((op) => typeof op === "string" ? ["dec", "ch", "inc"].includes(op) : "stitch" in op ? ["dec", "ch", "inc"].includes(op.stitch) : !("color" in op)))
             throw new PatternSyntaxError("A same-stitch group supports ordinary stitches, bobbles and color changes; no chains, decreases, increases or branches.");
           operations = [{ same: operations }];
         }
-        let repetitions = 1;
+        let repetitions = prefixRepeat;
         if (
           ["rep", "repeat", "x", "*", "×"].includes(tokens[cursor]?.value ?? "")
         ) {
           cursor++;
-          repetitions = readCount();
+          repetitions *= readCount();
           if (["time", "times"].includes(tokens[cursor]?.value ?? "")) cursor++;
         }
         append(result, { operations, stitchCount: group.stitchCount }, repetitions);
         continue;
       }
       let count = 1;
-      if (/^\d+$/.test(tokens[cursor].value)) count = readCount();
+      if (/^\d+$/.test(tokens[cursor].value)) {
+        count = readCount();
+        if (["x", "×", "*"].includes(tokens[cursor]?.value ?? "")) cursor++;
+      }
       const token = tokens[cursor++];
       if (!token)
         throw new PatternSyntaxError(
@@ -300,14 +322,29 @@ function parseOperations(source: string): Operation[] {
         throw new PatternSyntaxError(
           `Unknown stitch “${token.value}”. Supported: sc, hdc, dc, tr, bobble, ch, slst, inc and dec.`,
         );
-      append(result, { operations: [operation], stitchCount: 1 }, count);
+      const suffix = tokens[cursor];
+      const adjacentColor = suffix && (suffix.color || suffix.colors) && suffix.position === token.position + token.value.length;
+      let parsedOperation: Operation = operation;
+      if (adjacentColor) {
+        cursor++;
+        const colors = suffix.colors ?? [yarnColor(suffix.value)];
+        if (colors.length > 1 && operation !== "inc")
+          throw new PatternSyntaxError("Two stitch colors are only supported on an increase, for example inc[#ffffff,#ff8800].");
+        parsedOperation = { stitch: operation, colors, name: colors.filter(Boolean).join("; ") };
+      }
+      if (["x", "*", "×", "rep", "repeat"].includes(tokens[cursor]?.value ?? "")) {
+        cursor++;
+        count *= readCount();
+        if (["time", "times"].includes(tokens[cursor]?.value ?? "")) cursor++;
+      }
+      append(result, { operations: [parsedOperation], stitchCount: operationCounts(operation).total }, count);
     }
     return result;
   }
 
   const group = sequence(0);
   if (cursor < tokens.length)
-    throw new PatternSyntaxError("There is a closing ] without a matching [.");
+    throw new PatternSyntaxError(`There is a closing ${tokens[cursor].value} without a matching ${tokens[cursor].value === "]" ? "[" : "("}.`);
   if (!group.operations.some((op) => operationCounts(op).output > 0))
     throw new PatternSyntaxError("This round has no stitches yet. Add body stitches after any branch.");
   return group.operations;
@@ -321,22 +358,22 @@ export interface RoundLine {
 /** Accept code notation and the compact printed Rnd 9–16 notation. */
 export function readRoundLine(line: string): RoundLine | null {
   const match =
-    /^(?:(?:rnd|round|r)\.?\s*)?(\d+)(?:\s*[-–—]\s*(\d+))?(?:\s*:\s*|\s+)(.*)$/i.exec(
+    /^(?:(?:rnd|round|r)\.?\s*)?(\d+)(?:\s*[-–—]\s*(\d+))?(?:\s*(\[[^\[\]]+\]))?(?:\s*:\s*|\s+)(.*)$/i.exec(
       line.trimStart(),
     );
   return match
     ? {
         start: Number(match[1]),
         end: match[2] ? Number(match[2]) : null,
-        instruction: match[3],
+        instruction: `${match[3] ? match[3] + " " : ""}${match[4]}`,
       }
     : null;
 }
 
-export function analyzeInstruction(text: string) {
+export function analyzeInstruction(text: string, previousCount?: number) {
   let instruction = text.split("//")[0].trim();
-  const declaredMatch = /\s*\((\d+)\)\s*$/.exec(instruction);
-  const declaredCount = declaredMatch ? Number(declaredMatch[1]) : null;
+  const declaredMatch = /\s*(?:\((\d+)\)|→\s*(\d+))\s*$/.exec(instruction);
+  const declaredCount = declaredMatch ? Number(declaredMatch[1] ?? declaredMatch[2]) : null;
   if (declaredMatch)
     instruction = instruction.slice(0, declaredMatch.index).trim();
   const duration = /\s+for\s+(\d+)\s+(?:rounds?|rnds?)\s*$/i.exec(instruction);
@@ -349,11 +386,17 @@ export function analyzeInstruction(text: string) {
   )
     throw new PatternSyntaxError(`Use between 1 and ${MAX_ROUNDS} rounds.`);
   if (duration) instruction = instruction.slice(0, duration.index).trim();
-  const foundation = /\s+in\s+(?:mc|mr|magic\s+ring)\s*$/i.test(instruction);
+  const foundation = /\s+in\s+(?:mc|mr|ring|magic\s+ring)\s*$/i.test(instruction);
   if (foundation)
     instruction = instruction
-      .replace(/\s+in\s+(?:mc|mr|magic\s+ring)\s*$/i, "")
+      .replace(/\s+in\s+(?:mc|mr|ring|magic\s+ring)\s*$/i, "")
       .trim();
+  instruction = instruction.replace(/\b(sc|hdc|dc|tr|slst|ss|bobble|bbl)\s+around\b/gi, (_, stitch: string) => {
+    const count = previousCount ?? declaredCount;
+    if (count === null || count === undefined || count < 1)
+      throw new PatternSyntaxError("An around instruction needs a previous round. Start with a counted foundation such as 6 sc in mr.");
+    return `${count} ${stitch}`;
+  });
   const operations = parseOperations(instruction);
   return {
     operations,
@@ -386,6 +429,8 @@ export function parsePattern(source: string): ParsedPattern {
   let explicitOrientation = false;
   let coursePrevious: number | null = null;
   const lines = source.split(/\r?\n/);
+  const branchPaints: { id: number; color: string; line: number }[] = [];
+  const paints: { round: number; index: number; color: string; line: number }[] = [];
 
   if (source.length > 120_000) {
     parsed.diagnostics.push({
@@ -410,6 +455,24 @@ export function parsePattern(source: string): ParsedPattern {
     }
 
     try {
+      const title = /^Pattern name:\s*"(.*)"$/i.exec(line);
+      if (title) { parsed.name = title[1]; named = true; continue; }
+      if (/^(?:start:\s*magic ring|fasten off)$/i.test(line)) continue;
+      const branchPaint = /^paint stitch (\d+):\s*(#[a-f0-9]{6})$/i.exec(line);
+      if (branchPaint) {
+        branchPaints.push({ id: Number(branchPaint[1]) - 1, color: branchPaint[2], line: lineNumber });
+        continue;
+      }
+      if (/^paint\b/i.test(line)) {
+        const paint = /^paint\s+(\d+):\s*(.+)$/i.exec(line);
+        if (!paint) throw new PatternSyntaxError("Use paint 3: 1=#ffffff, 2=#ff8800.");
+        for (const entry of paint[2].split(",")) {
+          const match = /^\s*(\d+)=(#[a-f0-9]{6})\s*$/i.exec(entry);
+          if (!match) throw new PatternSyntaxError("Paint entries use stitch-number=#rrggbb.");
+          paints.push({ round: Number(paint[1]), index: Number(match[1]), color: match[2], line: lineNumber });
+        }
+        continue;
+      }
       if (/^orientation\b/i.test(line)) {
         const match = /^orientation\s+(bottom-up|top-down)$/i.exec(line);
         if (!match) throw new PatternSyntaxError("Use orientation top-down or orientation bottom-up on its own line.");
@@ -438,7 +501,7 @@ export function parsePattern(source: string): ParsedPattern {
           "Start each round with its number, for example Rnd 1: 7 sc in mr.",
         );
       const { operations, foundation, declaredCount, repeatRounds } =
-        analyzeInstruction(roundLine.instruction);
+        analyzeInstruction(roundLine.instruction, parsed.rounds.at(-1)?.outputCount);
       const endRound =
         roundLine.end ?? roundLine.start + (repeatRounds ?? 1) - 1;
       if (
@@ -477,7 +540,7 @@ export function parsePattern(source: string): ParsedPattern {
           );
         if (
           roundNumber === 1 &&
-          operations.some((op) => op === "inc" || op === "dec")
+          operations.some((op) => op === "inc" || op === "dec" || (typeof op !== "string" && "stitch" in op && ["inc", "dec"].includes(op.stitch)))
         )
           throw new PatternSyntaxError(
             "Start with foundation stitches, for example 1: 6 sc in mc (6). Increases and decreases need an existing round.",
@@ -486,8 +549,8 @@ export function parsePattern(source: string): ParsedPattern {
         const consumed = operations.reduce((n, op) => n + operationCounts(op).input, 0);
         const produced = operations.reduce((n, op) => n + operationCounts(op).output, 0);
         const totalProduced = operations.reduce((n, op) => n + operationCounts(op).total, 0);
-        const increases = operations.filter((op) => op === "inc").length;
-        const decreases = operations.filter((op) => op === "dec").length;
+        const increases = operations.filter((op) => op === "inc" || (typeof op !== "string" && "stitch" in op && op.stitch === "inc")).length;
+        const decreases = operations.filter((op) => op === "dec" || (typeof op !== "string" && "stitch" in op && op.stitch === "dec")).length;
         if (parsed.stitches.length + totalProduced > MAX_STITCHES)
           throw new PatternSyntaxError(
             `This preview supports up to ${MAX_STITCHES.toLocaleString()} stitches, including branches. Try a smaller pattern.`,
@@ -555,17 +618,25 @@ export function parsePattern(source: string): ParsedPattern {
           const same = typeof operation !== "string" && "same" in operation ? operation.same : null;
           if (same && !parentRound)
             throw new PatternSyntaxError("A same-stitch group needs an existing round to attach to.");
-          const needed = !parentRound || operation === "ch" ? 0 : operation === "dec" ? 2 : 1;
+          const typed = typeof operation !== "string" && "stitch" in operation ? operation.stitch : operation;
+          const needed = !parentRound || typed === "ch" ? 0 : typed === "dec" ? 2 : 1;
           const parents = parentRound?.stitches.slice(parentCursor, parentCursor + needed).map((stitch) => stitch.id) ?? [];
           parentCursor += needed;
           if (same) {
             for (const child of same) {
               if (typeof child === "string") create(child as StitchType, parents);
               else if ("color" in child) color = child.color;
+              else if ("stitch" in child) {
+                const result = create(child.stitch as StitchType, parents);
+                result.color = child.colors[0] ?? color;
+              }
             }
-          } else if (typeof operation === "string") {
-            for (let child = 0; child < (operation === "inc" ? 2 : 1); child++)
-              create(operation === "inc" ? "sc" : operation, parents, operation === "inc");
+          } else if (typeof typed === "string") {
+            for (let child = 0; child < (typed === "inc" ? 2 : 1); child++) {
+              const result = create(typed === "inc" ? "sc" : typed, parents, typed === "inc");
+              if (typeof operation !== "string" && "stitch" in operation)
+                result.color = operation.colors[operation.colors.length === 1 ? 0 : child] ?? color;
+            }
           }
         }
         round.color = round.stitches[0].color;
@@ -591,6 +662,25 @@ export function parsePattern(source: string): ParsedPattern {
     }
   }
 
+  for (const paint of branchPaints) {
+    const stitch = parsed.stitches[paint.id];
+    if (stitch) {
+      stitch.patternColor ??= stitch.color;
+      stitch.paintSourceLine = paint.line;
+      stitch.color = paint.color.toLowerCase();
+    }
+    else parsed.diagnostics.push({ line: paint.line, severity: "error", message: `Paint references missing stitch ${paint.id + 1}.` });
+  }
+  for (const paint of paints) {
+    const stitch = parsed.rounds[paint.round - 1]?.stitches[paint.index - 1];
+    if (stitch) {
+      stitch.patternColor ??= stitch.color;
+      stitch.paintSourceLine = paint.line;
+      stitch.color = paint.color.toLowerCase();
+    }
+    else parsed.diagnostics.push({ line: paint.line, severity: "error", message: `Paint references missing stitch ${paint.index} in round ${paint.round}.` });
+  }
+  for (const round of parsed.rounds) round.color = round.stitches[0].color;
   for (const eyes of parsed.eyes) {
     const message = validateEyePair(eyes, parsed.rounds);
     if (message) parsed.diagnostics.push({ line: eyes.line, severity: "error", message });

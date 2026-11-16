@@ -50,7 +50,7 @@ export function PatternWorksheet({
       ? [{ ...header, line: index + 1, body: worksheetInstruction(text) }]
       : [];
   });
-  const titleIndex = lines.findIndex((l) => /^#/.test(l));
+  const titleIndex = lines.findIndex((l) => /^#|^Pattern name:/i.test(l));
   const last = rows.at(-1);
   let next = 1;
   if (last) {
@@ -97,7 +97,7 @@ export function PatternWorksheet({
         <span>PATTERN NAME</span>
         <input
           aria-label="Pattern name"
-          value={titleIndex >= 0 ? lines[titleIndex].replace(/^#+\s*/, "") : ""}
+          value={titleIndex >= 0 ? lines[titleIndex].replace(/^#+\s*|^Pattern name:\s*"?|"$/gi, "") : ""}
           placeholder="Untitled pattern"
           onChange={(e) => {
             if (titleIndex >= 0)

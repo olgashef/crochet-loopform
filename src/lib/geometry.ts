@@ -1,4 +1,5 @@
 import type { ParsedPattern, Stitch, StitchType } from "./pattern";
+import { PREVIEW_STITCH_WIDTH } from './stitchScale';
 
 export type Position = [number, number, number];
 
@@ -7,6 +8,8 @@ export interface ModelPoint {
   round: number;
   index: number;
   color: string;
+  patternColor?: string;
+  paintSourceLine?: number;
   type: StitchType;
   position: Position;
   parents: number[];
@@ -36,7 +39,7 @@ export interface ModelGeometry {
 }
 
 const TAU = Math.PI * 2;
-const STITCH_WIDTH = 0.9;
+const STITCH_WIDTH = PREVIEW_STITCH_WIDTH;
 const COURSE_HEIGHT = 0.92;
 
 /** Relative material heights, kept separate from display yarn thickness. */
@@ -81,11 +84,21 @@ export function buildGeometry(pattern: ParsedPattern): ModelGeometry {
   let previousHeight = 0;
   let courseY = 0;
 
+  const closed = pattern.rounds.length >= 7 && (pattern.rounds.at(-1)?.outputCount ?? 99) <= 8;
+  let profile = pattern.rounds.map(round => Math.max(0.22, round.stitches.length * STITCH_WIDTH / TAU));
+  if (closed) {
+    // A stuffed fabric shoulder curves across neighboring courses. Relax only
+    // the profile, retaining every stitch and its construction relationships.
+    for (let pass = 0; pass < 3; pass++) {
+      profile = profile.map((radius, i, radii) => i === 0 || i === radii.length - 1 ? radius :
+        radius * .5 + (radii[i-1] + radii[i+1]) * .25);
+    }
+  }
   for (const round of pattern.rounds) {
     const count = round.stitches.length;
     if (!count) continue;
 
-    const radius = Math.max(0.22, (count * STITCH_WIDTH) / TAU);
+    const radius = profile[round.number - 1];
     const meanStitchHeight =
       round.stitches.reduce(
         (sum, stitch) => sum + (HEIGHT[stitch.type] ?? 1),
@@ -185,6 +198,8 @@ export function buildGeometry(pattern: ParsedPattern): ModelGeometry {
         round: stitch.round,
         index: stitch.index,
         color: stitch.color,
+        patternColor: stitch.patternColor,
+        paintSourceLine: stitch.paintSourceLine,
         type: stitch.type,
         parents: [...stitch.parents],
         previous: stitch.previous,
@@ -233,6 +248,8 @@ export function buildGeometry(pattern: ParsedPattern): ModelGeometry {
       round: stitch.round,
       index: stitch.index,
       color: stitch.color,
+      patternColor: stitch.patternColor,
+      paintSourceLine: stitch.paintSourceLine,
       type: stitch.type,
       parents: [...stitch.parents],
       previous: stitch.previous,

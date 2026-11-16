@@ -1,1406 +1,192 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertCircle,
-  ArrowDownToLine,
-  ArrowRight,
-  ArrowUpRight,
-  BookOpen,
-  Box,
-  Braces,
-  Check,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  CircleHelp,
-  FileJson,
-  FileText,
-  FolderOpen,
-  Image,
-  Layers3,
-  Maximize2,
-  Minus,
-  MousePointer2,
-  MoveVertical,
-  Undo2,
-  Pause,
-  Play,
-  Plus,
-  RotateCcw,
-  Sparkles,
-  X,
-} from "lucide-react";
-import { PatternWorksheet } from "./components/PatternWorksheet";
-import { SafetyEyeControls } from "./components/SafetyEyeControls";
-import { setPatternOrientation, type PatternOrientation } from "./lib/orientation";
-import { csvPattern, writtenPattern } from "./lib/worksheet";
-import { PatternEditor } from "./components/PatternEditor";
-import { ModelViewer, type ViewerHandle } from "./components/ModelViewer";
-import { StitchLegend } from "./components/StitchLegend";
-import { sanitizeRowOffsets, type RowOffsets } from "./lib/rowOffsets";
-import { buildGeometry } from "./lib/geometry";
-import { EXAMPLES, parsePattern, YARN_COLORS } from "./lib/pattern";
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowDownToLine, BookOpen, Box, Check, CheckCircle2, ChevronDown, CircleHelp, Copy, Download, Focus, FolderOpen, Grid2X2, Layers3, Maximize2, Minus, MousePointer2, MoveVertical, Paintbrush, Pause, Play, Plus, Redo2, RotateCcw, Search, Sparkles, Trash2, Undo2, X } from 'lucide-react';
+import { StitchChart } from './components/StitchChart';
+import { PaintedColorsNotice } from './components/PaintedColorsNotice';
+import { YarnPalette, type ColorTool } from './components/YarnPalette';
+import { PatternEditor } from './components/PatternEditor';
+import { PatternWorksheet } from './components/PatternWorksheet';
+import { AssemblyViewer, type AssemblyTool } from './components/AssemblyViewer';
+import { AssemblyControls } from './components/AssemblyControls';
+import { detachPlacement, earPattern, findAnchor, identityPlacement, stagedPlacement, type PiecePlacement } from './lib/assembly';
+import { ModelViewer, type ViewerHandle } from './components/ModelViewer';
+import { SafetyEyeControls } from './components/SafetyEyeControls';
+import { SafetyEyesDialog } from './components/SafetyEyesDialog';
+import type { SafetyEyePair } from './lib/safetyEyes';
+import { buildGeometry } from './lib/geometry';
+import { parsePattern } from './lib/pattern';
+import { projectContentKey, receiveProject } from './lib/projectSync';
+import { colorSelection, paintStitches, restorePatternColors, type ColorScope } from './lib/colorwork';
+import { download, initialProject, newPiece, STUDIO_EXAMPLES, validProject, type Project } from './lib/studio';
+import { setPatternOrientation, type PatternOrientation } from './lib/orientation';
+import { offsetRows, sanitizeRowOffsets } from './lib/rowOffsets';
 
-function RowOffsetInput({
-  value,
-  onCommit,
-}: {
-  value: number;
-  onCommit: (value: number) => void;
-}) {
-  const [draft, setDraft] = useState(String(value));
-  const [focused, setFocused] = useState(false);
-  useEffect(() => {
-    if (!focused) setDraft(String(Number(value.toFixed(3))));
-  }, [value, focused]);
-  return (
-    <input
-      aria-label="Row vertical offset"
-      type="number"
-      step="0.1"
-      min="-1000"
-      max="1000"
-      value={draft}
-      onFocus={() => setFocused(true)}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => {
-        setFocused(false);
-        const next = Number(draft);
-        if (draft.trim() && Number.isFinite(next)) onCommit(next);
-        else setDraft(String(value));
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") e.currentTarget.blur();
-      }}
-    />
-  );
-}
-
-const STORAGE_KEY = "loopform.workspace.v1";
-const STITCH_NAMES: Record<string, string> = {
-  sc: "Single crochet",
-  hdc: "Half double crochet",
-  dc: "Double crochet",
-  tr: "Treble crochet",
-  ch: "Chain",
-  slst: "Slip stitch",
-  dec: "Decrease",
-  bobble: "Bobble stitch",
-};
-
-function readWorkspace(): {
-  source: string;
-  compiledSource: string;
-  thickness: number;
-  rowOffsets: RowOffsets;
-  editorMode: "worksheet" | "code";
-} {
-  try {
-    const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-    if (typeof value?.source === "string" && value.source.length <= 120_000) {
-      const candidate =
-        typeof value.compiledSource === "string" &&
-        value.compiledSource.length <= 120_000
-          ? value.compiledSource
-          : value.source;
-      const compiledSource = parsePattern(candidate).diagnostics.some(
-        (item) => item.severity === "error",
-      )
-        ? EXAMPLES[0].source
-        : candidate;
-      return {
-        source: value.source,
-        editorMode: value.editorMode === "code" ? "code" : "worksheet",
-        compiledSource,
-        rowOffsets:
-          compiledSource === candidate
-            ? sanitizeRowOffsets(value.rowOffsets)
-            : {},
-        thickness: Number.isFinite(value.thickness)
-          ? Math.min(1.65, Math.max(0.6, value.thickness))
-          : 1,
-      };
-    }
-  } catch {
-    /* An unavailable local store should not prevent editing. */
-  }
-  return {
-    source: EXAMPLES[0].source,
-    compiledSource: EXAMPLES[0].source,
-    thickness: 1,
-    rowOffsets: {},
-    editorMode: "worksheet",
-  };
-}
-
-function saveFile(name: string, content: string, type: string) {
-  const url = URL.createObjectURL(new Blob([content], { type }));
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = name;
-  anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
+const LIBRARY = [
+  { symbol:'◎', name:'Magic ring', code:'6 sc in mr', detail:'Start a closed piece in the round', group:'Starting & shaping' },
+  { symbol:'∨', name:'Increase', code:'inc', detail:'2 stitches into the same stitch', group:'Starting & shaping' },
+  { symbol:'∧', name:'Decrease', code:'dec', detail:'Join 2 stitches into one', group:'Starting & shaping' },
+  { symbol:'×', name:'Single crochet', code:'sc', detail:'The foundation of amigurumi', group:'Essential stitches' },
+  { symbol:'┬', name:'Half double crochet', code:'hdc', detail:'A little more height and texture', group:'Essential stitches' },
+  { symbol:'Ŧ', name:'Double crochet', code:'dc', detail:'A taller, open stitch', group:'Essential stitches' },
+  { symbol:'ǂ', name:'Treble crochet', code:'tr', detail:'An extra tall yarn post', group:'Essential stitches' },
+  { symbol:'○', name:'Chain', code:'ch', detail:'A foundation loop', group:'Essential stitches' },
+  { symbol:'•', name:'Slip stitch', code:'slst', detail:'A compact joining stitch', group:'Essential stitches' },
+  { symbol:'♧', name:'Bobble', code:'bobble', detail:'A raised cluster for soft texture', group:'Texture' },
+  { symbol:'● ●', name:'Safety eyes', code:'eyes', detail:'Choose placement and size in mm', group:'Accessories' },
+];
+const PALETTE = ['#f3e8d6','#cba477','#9a674a','#493a37','#e9bb4e','#d87b55','#dc969c','#a291bc','#8aa58b','#5c8580','#799cb5','#efefea'];
 export default function App() {
-  const [initial] = useState(readWorkspace);
-  const [rowOffsets, setRowOffsets] = useState<RowOffsets>(initial.rowOffsets);
-  const rowOffsetsRef = useRef(rowOffsets);
-  rowOffsetsRef.current = rowOffsets;
-  const [moveRows, setMoveRows] = useState(false);
-  const [selectedRow, setSelectedRow] = useState<number | null>(null);
-  const [rowHistory, setRowHistory] = useState<RowOffsets[]>([]);
-  const rowHistoryRef = useRef(rowHistory);
-  rowHistoryRef.current = rowHistory;
-  const pendingMove = useRef<RowOffsets | null>(null);
-  const applyRowOffsets = useCallback((next: RowOffsets) => {
-    rowOffsetsRef.current = next;
-    setRowOffsets(next);
-  }, []);
-  const moveRow = useCallback(
-    (row: number, value: number) => {
-      if (!Number.isFinite(value)) return;
-      const next = {
-        ...rowOffsetsRef.current,
-        [row]: Math.max(-1000, Math.min(1000, value)),
-      };
-      if (Math.abs(next[row]) < 0.00001) delete next[row];
-      applyRowOffsets(next);
-    },
-    [applyRowOffsets],
-  );
-  const startRowMove = useCallback(() => {
-    pendingMove.current = { ...rowOffsetsRef.current };
-  }, []);
-  const endRowMove = useCallback((cancel = false) => {
-    const previous = pendingMove.current;
-    pendingMove.current = null;
-    if (
-      !cancel &&
-      previous &&
-      JSON.stringify(previous) !== JSON.stringify(rowOffsetsRef.current)
-    )
-      setRowHistory((h) => [...h.slice(-49), previous]);
-  }, []);
-  const undoRowMove = useCallback(() => {
-    const history = rowHistoryRef.current;
-    if (!history.length) return;
-    applyRowOffsets(history[history.length - 1]);
-    const next = history.slice(0, -1);
-    rowHistoryRef.current = next;
-    setRowHistory(next);
-  }, [applyRowOffsets]);
-  function stepRow(row: number, value: number) {
-    startRowMove();
-    moveRow(row, value);
-    endRowMove();
+  const [project, setProject] = useState<Project>(initialProject);
+  const persistedKey = useRef<string|null>(null);
+  const [past, setPast] = useState<Project[]>([]); const [future, setFuture] = useState<Project[]>([]);
+  const piece = project.pieces.find(p => p.id === project.activeId)!;
+  const source = piece.source;
+  const parsed = useMemo(() => parsePattern(source), [source]);
+  const model = useMemo(() => buildGeometry(parsed), [parsed]);
+  const [selection, setSelection] = useState<number[]>([]);
+  const selected = parsed.stitches.find(s => s.id === selection[selection.length - 1]);
+  const [paint, setPaint] = useState(false); const [scope, setScope] = useState<ColorScope>('Stitch');
+  const [colorTool,setColorTool] = useState<ColorTool>('brush');
+  const [color, setColor] = useState('#f3e8d6');
+  const [view, setView] = useState<'3d'|'chart'|'assembly'>(()=>project.pieces.some(p=>p.placement?.parentId)?'assembly':'3d');
+  const [assemblyTool, setAssemblyTool] = useState<AssemblyTool>('select');
+  const dragSnapshot = useRef<Project|null>(null);
+  const mainPiece = project.pieces[0];
+  const mainModel = useMemo(() => offsetRows(buildGeometry(parsePattern(mainPiece.source)),mainPiece.rowOffsets),[mainPiece.source,mainPiece.rowOffsets]);
+  const placement = piece.placement ?? (piece.id===mainPiece.id ? identityPlacement() : stagedPlacement(project.pieces.indexOf(piece),mainModel,model));
+  const [backdrop, setBackdrop] = useState<'dark'|'light'>('dark');
+  const [editorMode, setEditorMode] = useState<'code'|'rounds'>('code');
+  const [mode, setMode] = useState<'stitches'|'structure'>('stitches');
+  const [roundLimit, setRoundLimit] = useState(150); const [playing, setPlaying] = useState(false);
+  const [thickness, setThickness] = useState(1); const [moveRows, setMoveRows] = useState(false);
+  const [selectedRow, setSelectedRow] = useState<number|null>(null);
+  const [pendingInsert, setPendingInsert] = useState<string|null>(null);
+  const [search, setSearch] = useState(''); const [menu, setMenu] = useState<'examples'|'export'|'help'|null>(null);
+  const [eyeDialog,setEyeDialog] = useState<{pair?:SafetyEyePair}|null>(null);
+  const [focusEyes,setFocusEyes] = useState<number|null>(null);
+  useEffect(()=>{if(focusEyes!==null&&view==='3d'){viewer.current?.focusEyePair?.(focusEyes);setFocusEyes(null);}},[focusEyes,view,source]);
+  useEffect(()=>setEyeDialog(null),[piece.id]);
+  const [saved, setSaved] = useState(true); const [toast, setToast] = useState(''); const [libraryOpen, setLibraryOpen] = useState(true);
+  const viewer = useRef<ViewerHandle>(null); const panel = useRef<HTMLElement>(null); const input = useRef<HTMLInputElement>(null);
+  const rounds = parsed.rounds.length; const visibleRounds = Math.min(roundLimit, rounds);
+  const errors = parsed.diagnostics.filter(d => d.severity === 'error');
+  const usedColors = [...new Set(parsed.stitches.map(s => s.color))];
+  function update(next: Project, record = true) { if (record) { setPast(p => [...p.slice(-49), project]); setFuture([]); } setProject(next); }
+  function changeSource(next: string) { if(next.length > 120000) {setToast('Keep each piece under 120,000 characters.');return;} setSelection([]); update({...project, pieces: project.pieces.map(p => p.id === piece.id ? {...p, source: next} : p)}); }
+  function undo() { if (!past.length) return; setFuture(p => [project, ...p]); setProject(past[past.length-1]); setPast(p => p.slice(0,-1)); setSelection([]); setAssemblyTool('select'); }
+  function redo() { if (!future.length) return; setPast(p => [...p, project]); setProject(future[0]); setFuture(p => p.slice(1)); setSelection([]); setAssemblyTool('select'); }
+  useEffect(() => {
+    const key=projectContentKey(project);
+    if(persistedKey.current===key)return;
+    try {localStorage.setItem('loopform.studio.v2',JSON.stringify(project));persistedKey.current=key;setSaved(true);} catch {setSaved(false);}
+  },[project]);
+  useEffect(() => {
+    function receive(event:StorageEvent) {
+      if(event.key!=='loopform.studio.v2'||!event.newValue)return;
+      try {
+        const incoming:unknown=JSON.parse(event.newValue);
+        if(!validProject(incoming))return;
+        const key=projectContentKey(incoming);if(key===persistedKey.current)return;
+        persistedKey.current=key;
+        setProject(current=>receiveProject(current,incoming));setPast([]);setFuture([]);setSelection([]);setSaved(true);
+      } catch { /* Ignore incomplete writes from another tab. */ }
+    }
+    window.addEventListener('storage',receive);return()=>window.removeEventListener('storage',receive);
+  },[]);
+  useEffect(() => { setSelection([]); setSelectedRow(null); setRoundLimit(150); setPlaying(false); setAssemblyTool('select'); }, [piece.id]);
+  useEffect(() => { if (!playing) return; const timer = setInterval(() => setRoundLimit(r => { if (r >= rounds) { setPlaying(false); return rounds; } return r+1; }), 450); return () => clearInterval(timer); }, [playing, rounds]);
+  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(''), 3500); return () => clearTimeout(t); }, [toast]);
+  useEffect(() => { const fn = (e: KeyboardEvent) => { if (e.key === 'Escape') { setMenu(null); setSelection([]); setAssemblyTool('select'); setColorTool('brush'); } }; window.addEventListener('keydown', fn); return () => window.removeEventListener('keydown', fn); }, []);
+  function select(id: number|null) {
+    if (id === null) { setSelection([]); return; }
+    if (paint && scope === 'Multi') setSelection(s => s.includes(id) ? s.filter(x => x!==id) : [...s,id]);
+    else setSelection(colorSelection(parsed, id, paint ? scope : 'Stitch'));
   }
-  const [worksheetEditingLine, setWorksheetEditingLine] = useState<
-    number | null
-  >(null);
-  const [editorMode, setEditorMode] = useState<"worksheet" | "code">(
-    initial.editorMode,
-  );
-  const [source, setSource] = useState(initial.source);
-  const [compiledSource, setCompiledSource] = useState(initial.compiledSource);
-  const [thickness, setThickness] = useState(initial.thickness);
-  const [autoRender, setAutoRender] = useState(true);
-  const [visibleRounds, setVisibleRounds] = useState(150);
-  const [playing, setPlaying] = useState(false);
-  const [mode, setMode] = useState<"stitches" | "structure">("stitches");
-  const [selectedStitch, setSelectedStitch] = useState<number | null>(null);
-  const [menu, setMenu] = useState<"examples" | "export" | null>(null);
-  const [help, setHelp] = useState<"syntax" | "model" | null>(null);
-  const [toast, setToast] = useState("");
-  const [saveState, setSaveState] = useState<"saved" | "unavailable">("saved");
-  const [rendering, setRendering] = useState(false);
-  const viewer = useRef<ViewerHandle>(null);
-  const previewPanel = useRef<HTMLElement>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
-
-  const draft = useMemo(() => parsePattern(source), [source]);
-  const compiled = useMemo(
-    () => parsePattern(compiledSource),
-    [compiledSource],
-  );
-  const geometry = useMemo(() => buildGeometry(compiled), [compiled]);
-  const errors = draft.diagnostics.filter(
-    (diagnostic) => diagnostic.severity === "error",
-  );
-  const pendingWorksheet =
-    editorMode === "worksheet" &&
-    errors.length > 0 &&
-    errors[0].line === worksheetEditingLine;
-  const warning = draft.diagnostics.find(
-    (diagnostic) => diagnostic.severity === "warning",
-  );
-  const roundCount = compiled.rounds.length;
-  const currentRound = Math.max(1, Math.min(visibleRounds, roundCount || 1));
-  const visibleStitchTypes = useMemo(
-    () => [
-      ...new Set(
-        compiled.stitches
-          .filter((stitch) => stitch.round <= currentRound)
-          .map((stitch) => stitch.type),
-      ),
-    ],
-    [compiled, currentRound],
-  );
-  const dirty = compiledSource !== source;
-  const selected =
-    selectedStitch === null
-      ? null
-      : compiled.stitches.find((stitch) => stitch.id === selectedStitch);
-  const colors = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const stitch of compiled.stitches)
-      counts.set(stitch.color, (counts.get(stitch.color) || 0) + 1);
-    return [...counts].map(([color, count]) => ({
-      color,
-      count,
-      name:
-        Object.entries(YARN_COLORS).find(([, value]) => value === color)?.[0] ||
-        color,
-    }));
-  }, [compiled]);
-
-  const renderPattern = useCallback(() => {
-    if (
-      draft.diagnostics.some((diagnostic) => diagnostic.severity === "error")
-    ) {
-      setToast("Check the highlighted line before rendering.");
-      return;
-    }
-    if (source !== compiledSource) {
-      applyRowOffsets({});
-      setRowHistory([]);
-      setSelectedRow(null);
-    }
-    setCompiledSource(source);
-    setSelectedStitch(null);
-    setVisibleRounds(draft.rounds.length || 1);
-    setPlaying(false);
-    setRendering(true);
-    window.setTimeout(() => setRendering(false), 400);
-  }, [source, compiledSource, draft, applyRowOffsets]);
-
-  useEffect(() => {
-    if (!autoRender || !dirty || errors.length) return;
-    const timeout = window.setTimeout(renderPattern, 450);
-    return () => window.clearTimeout(timeout);
-  }, [autoRender, dirty, source, errors.length, renderPattern]);
-
-  useEffect(() => {
+  function useColorTool(tool:ColorTool) {setPaint(true);setMoveRows(false);setPlaying(false);setMode('stitches');setColorTool(tool);setSelection([]);}
+  function chooseColor(next:string) {setColor(next.toLowerCase());if(!paint)useColorTool('brush');else if(colorTool==='sample')setColorTool('brush');}
+  function sampleColor(next:string) {setColor(next.toLowerCase());useColorTool('brush');setToast(`Exact yarn ${next.toUpperCase()} picked. Drag to paint with it.`);}
+  function brushStitches(ids:number[],next:string):boolean {
     try {
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          version: 1,
-          source,
-          compiledSource,
-          thickness,
-          rowOffsets,
-          editorMode,
-        }),
-      );
-      setSaveState("saved");
-    } catch {
-      setSaveState("unavailable");
-    }
-  }, [source, compiledSource, thickness, rowOffsets, editorMode]);
-
-  useEffect(() => {
-    if (!playing) return;
-    const interval = window.setInterval(() => {
-      setVisibleRounds((round) => Math.min(round + 1, roundCount));
-    }, 700);
-    return () => window.clearInterval(interval);
-  }, [playing, roundCount]);
-
-  useEffect(() => {
-    if (playing && visibleRounds >= roundCount) setPlaying(false);
-  }, [playing, visibleRounds, roundCount]);
-
-  useEffect(() => {
-    if (!toast) return;
-    const timer = window.setTimeout(() => setToast(""), 4000);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
-
-  useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setHelp(null);
-        setMenu(null);
-        setSelectedStitch(null);
-      }
-    };
-    const click = (event: MouseEvent) => {
-      if (!(event.target as Element).closest("[data-dropdown]")) setMenu(null);
-    };
-    window.addEventListener("keydown", handler);
-    window.addEventListener("click", click);
-    return () => {
-      window.removeEventListener("keydown", handler);
-      window.removeEventListener("click", click);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (selectedRow !== null && selectedRow > currentRound)
-      setSelectedRow(null);
-  }, [selectedRow, currentRound]);
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      if (
-        !moveRows ||
-        (e.target instanceof Element &&
-          e.target.closest('input,textarea,select,[contenteditable="true"]'))
-      )
-        return;
-      if (e.key === "Escape") {
-        setSelectedRow(null);
-        return;
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
-        e.preventDefault();
-        undoRowMove();
-        return;
-      }
-      if (selectedRow !== null && ["ArrowUp", "ArrowDown"].includes(e.key)) {
-        e.preventDefault();
-        startRowMove();
-        moveRow(
-          selectedRow,
-          (rowOffsetsRef.current[selectedRow] || 0) +
-            (e.key === "ArrowUp" ? 1 : -1) * (e.shiftKey ? 0.5 : 0.1),
-        );
-        endRowMove();
-      }
-    };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [moveRows, selectedRow, undoRowMove, startRowMove, moveRow, endRowMove]);
-
-  function loadSource(value: string) {
-    setWorksheetEditingLine(null);
-    if (value.length > 120_000) {
-      setToast("This pattern is too large. Use at most 120,000 characters.");
-      return;
-    }
-    applyRowOffsets({});
-    setRowHistory([]);
-    setSelectedRow(null);
-    setSource(value);
-    setSelectedStitch(null);
-    setPlaying(false);
-    const result = parsePattern(value);
-    if (
-      !result.diagnostics.some((diagnostic) => diagnostic.severity === "error")
-    ) {
-      setCompiledSource(value);
-      setVisibleRounds(result.rounds.length || 1);
-      setSelectedStitch(null);
-      setPlaying(false);
-    }
-    setMenu(null);
+      const result=paintStitches(source,ids,next);
+      if(result!==source){changeSource(result);setToast(`${ids.length} stitch${ids.length===1?'':'es'} painted · Undo restores the stroke`);}
+      return true;
+    }catch(error){setToast((error as Error).message);return false;}
   }
-
-  const filename = (compiled.name || "my-pattern")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-");
-
-  return (
-    <div className="app-shell">
-      <header className="app-header">
-        <a className="brand" href="/" aria-label="Loopform home">
-          <span className="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 40 40">
-              <ellipse
-                cx="20"
-                cy="20"
-                rx="7"
-                ry="13"
-                transform="rotate(-35 20 20)"
-              />
-              <ellipse
-                cx="20"
-                cy="20"
-                rx="7"
-                ry="13"
-                transform="rotate(35 20 20)"
-              />
-            </svg>
-          </span>
-          <span>
-            loopform<span className="brand-period">.</span>
-          </span>
-          <span className="beta-badge">BETA</span>
-        </a>
-        <nav className="header-nav" aria-label="Main navigation">
-          <span className="nav-workspace">
-            <Box size={15} /> Workspace
-          </span>
-          <button onClick={() => setHelp("syntax")}>
-            <BookOpen size={15} /> Syntax guide{" "}
-            <ArrowUpRight className="nav-arrow" size={12} />
-          </button>
-        </nav>
-        <div className="header-right">
-          <span className="local-save">
-            <span className="status-dot" />{" "}
-            {saveState === "saved"
-              ? "Saved on this device"
-              : "Local saving unavailable"}
-          </span>
-          <button
-            className="button subtle open-button"
-            onClick={() => fileInput.current?.click()}
-          >
-            <FolderOpen size={15} /> Open
-          </button>
-          <div className="dropdown-container" data-dropdown>
-            <button
-              className="button export-button"
-              aria-expanded={menu === "export"}
-              onClick={() => setMenu(menu === "export" ? null : "export")}
-            >
-              <ArrowDownToLine size={15} /> Export <ChevronDown size={13} />
-            </button>
-            {menu === "export" && (
-              <div className="dropdown export-menu">
-                <span className="dropdown-heading">
-                  TAKE YOUR WORK WITH YOU
-                </span>
-                <button
-                  onClick={() => {
-                    saveFile(
-                      `${filename}.crochet`,
-                      writtenPattern(source),
-                      "text/plain",
-                    );
-                    setMenu(null);
-                  }}
-                >
-                  <FileText size={17} />
-                  <span>
-                    Pattern text
-                    <small>Written rounds with automatic totals</small>
-                  </span>
-                </button>
-                <button
-                  onClick={() => {
-                    saveFile(`${filename}.csv`, csvPattern(source), "text/csv;charset=utf-8");
-                    setMenu(null);
-                  }}
-                >
-                  <FileText size={17} />
-                  <span>
-                    Pattern CSV
-                    <small>Rounds, instructions, totals and yarn for spreadsheets</small>
-                  </span>
-                </button>
-                <button
-                  onClick={() => {
-                    saveFile(
-                      `${filename}.json`,
-                      JSON.stringify(
-                        {
-                          version: 1,
-                          application: "loopform",
-                          rowOffsets: dirty ? {} : rowOffsets,
-                          source,
-                          thickness,
-                        },
-                        null,
-                        2,
-                      ),
-                      "application/json",
-                    );
-                    setMenu(null);
-                  }}
-                >
-                  <FileJson size={17} />
-                  <span>
-                    Loopform project
-                    <small>Pattern, shape edits and display settings</small>
-                  </span>
-                </button>
-                <button
-                  onClick={() => {
-                    viewer.current?.exportImage();
-                    setMenu(null);
-                  }}
-                >
-                  <Image size={17} />
-                  <span>
-                    Model image<small>Save the current view as PNG</small>
-                  </span>
-                </button>
-              </div>
-            )}
-          </div>
+  function applyColor(next = color, ids = selection) {
+    setColor(next);
+    if (!ids.length) return;
+    try { const result = paintStitches(source, ids, next); changeSource(result); setSelection(ids); } catch (e) { setToast((e as Error).message); }
+  }
+  function addRound() {
+    const count = parsed.rounds.at(-1)?.outputCount ?? 6;
+    const lines = source.split('\n'); const last = parsed.rounds.at(-1)?.line ?? lines.length;
+    lines.splice(last,0,`Round ${rounds+1}: ${count} sc${rounds ? '' : ' in mr'} → ${count}`);
+    changeSource(lines.join('\n')); setRoundLimit(150);
+  }
+  function insert(code: string) { setEditorMode('code'); setPendingInsert(code); }
+  useEffect(() => { if(editorMode === 'code' && pendingInsert !== null) {window.dispatchEvent(new CustomEvent('loopform:insert', {detail:pendingInsert}));setPendingInsert(null);} }, [editorMode,pendingInsert]);
+  function addPiece(source?: string, name?: string, offsets = {}, nextPlacement?: PiecePlacement) {
+    if (project.pieces.length >= 30) { setToast('A project supports up to 30 pieces.'); return; }
+    const p = newPiece(name ?? `Piece ${project.pieces.length+1}`, source ?? 'start: magic ring\n[cream]\nRound 1: 6 sc in mr → 6\nRound 2: 6 inc → 12');
+    p.rowOffsets = {...offsets};
+    p.placement = nextPlacement ?? stagedPlacement(project.pieces.length, mainModel, buildGeometry(parsePattern(p.source)));
+    update({...project, pieces:[...project.pieces,p], activeId:p.id});
+    setView('assembly');setPlaying(false);setAssemblyTool('select');
+  }
+  function changePlacement(next: PiecePlacement, id = piece.id, record = true) {
+    if(record) update({...project,pieces:project.pieces.map(p=>p.id===id?{...p,placement:next}:p)});
+    else setProject(p=>({...p,pieces:p.pieces.map(x=>x.id===id?{...x,placement:next}:x)}));
+  }
+  function duplicatePiece() { addPiece(source,`${piece.name} copy`,piece.rowOffsets,piece.id===mainPiece.id?undefined:{...placement,position:[placement.position[0]+1,placement.position[1],placement.position[2]]}); }
+  function selectPiece(id: string) {setProject(p=>({...p,activeId:id}));setAssemblyTool('select');}
+  function startAttachment() {
+    if(assemblyTool==='place'){setAssemblyTool('select');return;}
+    if(piece.hidden || mainPiece.hidden) update({...project,pieces:project.pieces.map(p=>p.id===piece.id||p.id===mainPiece.id?{...p,hidden:false}:p)});
+    setAssemblyTool('place');
+  }
+  const safeName = project.name.replace(/[^\w -]/g,'').trim() || 'loopform';
+  return <div className="studio">
+    <header className="app-header">
+      <a className="brand" href="#" aria-label="Loopform studio"><span className="brand-mark">ℓ</span>loopform<span className="brand-tag">STUDIO</span></a>
+      <nav aria-label="Workspace"><span className="nav-active"><Layers3 size={16}/> Pattern studio</span><button onClick={() => setMenu('examples')}><BookOpen size={16}/> Patterns</button></nav>
+      <div className="header-end"><span className="local-badge"><span/>Local workspace</span><button className="icon" title="How to use Loopform" onClick={() => setMenu('help')}><CircleHelp size={18}/></button><span className="avatar">O</span></div>
+    </header>
+    <div className="project-bar"><div className="project-title"><FolderOpen size={17}/><input aria-label="Project name" value={project.name} onChange={e => update({...project,name:e.target.value})}/><span className="save-status"><Check size={13}/>{saved ? 'Saved on this device' : 'Storage unavailable · export to save'}</span></div><div className="project-actions"><button onClick={() => input.current?.click()}><FolderOpen size={15}/>Open</button><button onClick={() => setMenu(menu==='export'?null:'export')}><Download size={15}/>Export<ChevronDown size={13}/></button><button className="primary" onClick={() => { download(`${safeName}.loopform.json`, JSON.stringify(project,null,2),'application/json'); setToast('Project downloaded with all pieces, colors, and attachments.'); }}><ArrowDownToLine size={15}/>Save project</button></div></div>
+    <div className="studio-intro"><div><span className="eyebrow">YOUR NEXT LITTLE CREATION</span><h1>A little yarn. Endless possibilities.</h1></div><p>Write a round. Watch it take shape.<br/>Make every stitch your own.</p></div>
+    <div className={`workspace ${!libraryOpen?'library-collapsed':''}`}>
+      <aside className="library panel">
+        <div className="panel-heading"><span><BookOpen size={15}/>Stitch library</span><button className="icon" title={libraryOpen?'Collapse library':'Open library'} onClick={() => setLibraryOpen(!libraryOpen)}>{libraryOpen?<Minus size={14}/>:<Plus size={14}/>}</button></div>
+        {libraryOpen && <><div className="library-search"><Search size={14}/><input placeholder="Find a stitch…" aria-label="Find a stitch" value={search} onChange={e => setSearch(e.target.value)}/><kbd>US</kbd></div><div className="library-list">{['Starting & shaping','Essential stitches','Texture','Accessories'].map(group => <section key={group}><h3>{group}</h3>{LIBRARY.filter(s => s.group===group && `${s.name} ${s.code}`.toLowerCase().includes(search.toLowerCase())).map(s => <button className="stitch-card" key={s.code} title={s.code==='eyes'?'Add safety eyes with placement and size':`Insert ${s.code} at the cursor`} onClick={() => {if(s.code==='eyes'){setEyeDialog({});return;}setEditorMode('code'); insert(s.code);}}><span className="stitch-symbol">{s.code==='eyes'?<svg className="safety-eyes-icon" viewBox="0 0 28 24" width="28" height="24" aria-hidden="true" focusable="false"><ellipse cx="7.5" cy="12" rx="5" ry="6" fill="currentColor"/><ellipse cx="20.5" cy="12" rx="5" ry="6" fill="currentColor"/><circle cx="6" cy="10" r="1.5" fill="white"/><circle cx="19" cy="10" r="1.5" fill="white"/></svg>:s.symbol}</span><span><strong>{s.name}</strong><small>{s.detail}</small><code>{s.code}</code></span><Plus className="insert-plus" size={13}/></button>)}</section>)}</div><div className="library-tip"><Sparkles size={15}/><p>A pattern starts with one loop.<br/><button onClick={() => setMenu('examples')}>Try a starter pattern →</button></p></div></>}
+      </aside>
+      <section className="editor panel">
+        <div className="panel-heading"><span><span className="dot mauve"/>Pattern editor</span><div className="heading-tools"><button className="icon" aria-label="Undo" disabled={!past.length} onClick={undo}><Undo2 size={16}/></button><button className="icon" aria-label="Redo" disabled={!future.length} onClick={redo}><Redo2 size={16}/></button><span className="divider"/><button className="icon" title="Pattern syntax" onClick={() => setMenu('help')}><CircleHelp size={15}/></button></div></div>
+        <div className="piece-tabs" aria-label="Pattern pieces">{project.pieces.map(p => <button className={p.id===piece.id?'active':''} key={p.id} onClick={() => selectPiece(p.id)}><span className="dot"/>{p.name}{p.id===mainPiece.id&&<small className="main-piece-tag">MAIN</small>}</button>)}<button className="add-piece" title="Add piece" onClick={() => addPiece()}><Plus size={14}/></button></div>
+        <div className="editor-toolbar"><div className="segmented"><button className={editorMode==='code'?'active':''} onClick={() => setEditorMode('code')}>Pattern</button><button className={editorMode==='rounds'?'active':''} onClick={() => setEditorMode('rounds')}>Rounds</button></div><span className="live-status"><span/>Live preview</span></div>
+        <PaintedColorsNotice key={piece.id} pattern={parsed} selected={selected} onRestore={ids=>{try{changeSource(restorePatternColors(source,ids));setToast('Written pattern colors restored. Undo brings back the brush edits.');}catch(error){setToast((error as Error).message);}}}/>
+        <div className="editor-body">{editorMode==='code'?<PatternEditor key={piece.id} value={source} onChange={changeSource} diagnostics={parsed.diagnostics} onRender={() => setRoundLimit(150)} selectedLine={selected?.sourceLine ?? null}/>:<PatternWorksheet value={source} onChange={changeSource} diagnostics={parsed.diagnostics} selectedLine={selected?.sourceLine ?? null} onRender={() => setRoundLimit(150)} onEditingChange={() => {}}/>}</div>
+        <div className="editor-bottom"><button onClick={addRound} disabled={!!errors.length || rounds>=150}><Plus size={14}/>Add round</button><span>{rounds} rounds <i>·</i> {parsed.stitches.length.toLocaleString()} stitches</span></div>
+        <details className="piece-details"><summary>Piece settings & accessories</summary><div className="piece-controls"><label>Name<input aria-label="Piece name" value={piece.name} onChange={e => update({...project,pieces:project.pieces.map(p => p.id===piece.id?{...p,name:e.target.value}:p)})}/></label><label>First round<select value={parsed.orientation} onChange={e => changeSource(setPatternOrientation(source,e.target.value as PatternOrientation))}><option value="bottom-up">At bottom</option><option value="top-down">At top</option></select></label><button onClick={duplicatePiece}><Copy size={14}/>Duplicate</button><button disabled={piece.id===mainPiece.id} title={piece.id===mainPiece.id?'Keep the main piece as the assembly base':'Remove this piece'} onClick={() => {const remaining=project.pieces.filter(p=>p.id!==piece.id);update({...project,pieces:remaining,activeId:remaining[0].id});}}><Trash2 size={14}/>Remove</button></div><SafetyEyeControls source={source} pattern={parsed} onChange={changeSource} onAdd={()=>setEyeDialog({})} onEdit={pair=>setEyeDialog({pair})}/></details>
+      </section>
+      <section className="preview panel" ref={panel}>
+        <div className="panel-heading"><span><Box size={16}/>Your creation<span className="preview-tag">LIVE</span></span><div className="heading-tools"><div className="segmented"><button aria-label="3D view" className={view==='3d'?'active':''} onClick={() => setView('3d')}>Piece</button><button aria-label="Assembly view" className={view==='assembly'?'active':''} onClick={()=>{setView('assembly');setPlaying(false);}}>Assembly</button><button aria-label="Stitch chart" className={view==='chart'?'active':''} onClick={() => setView('chart')}><Grid2X2 size={14}/></button></div><button className="icon" title="Fullscreen preview" onClick={() => document.fullscreenElement ? document.exitFullscreen() : panel.current?.requestFullscreen()}><Maximize2 size={15}/></button></div></div>
+        <div className="viewport" data-backdrop={backdrop}>
+          <div className="view-top">{view==='assembly'?<div className="view-mode assembly-modes">{(['select','translate','rotate'] as const).map(t=><button key={t} className={assemblyTool===t?'active':''} onClick={()=>setAssemblyTool(t)}>{t==='select'?'Explore':t==='translate'?'Move':'Rotate'}</button>)}</div>:<div className="view-mode"><button className={!paint&&!moveRows?'active':''} onClick={() => {setPaint(false);setMoveRows(false);}}><MousePointer2 size={14}/>Explore</button><button className={paint?'active':''} onClick={() => useColorTool('brush')}><Paintbrush size={14}/>Color</button><button className={moveRows?'active':''} title="Move individual rounds" onClick={() => {setMoveRows(!moveRows);setPaint(false);}}><MoveVertical size={14}/></button></div>}<button className="view-focus" title="Center model" onClick={() => viewer.current?.resetView()}><Focus size={18}/></button></div>
+          {view==='assembly'?<AssemblyViewer ref={viewer} pieces={project.pieces} activeId={piece.id} tool={assemblyTool} thickness={thickness} onSelect={selectPiece} onPlace={(id,next)=>{changePlacement(next,id);setAssemblyTool('select');setToast('Piece attached. Use Move or Rotate to fine-tune it.');}} onTransform={(id,next)=>changePlacement(next,id,false)} onDragStart={()=>{dragSnapshot.current=project;}} onDragEnd={()=>{if(dragSnapshot.current){const before=dragSnapshot.current;setPast(p=>[...p.slice(-49),before]);setFuture([]);dragSnapshot.current=null;}}}/>:view==='3d'?<ModelViewer ref={viewer} model={model} safetyEyes={parsed.eyes} rowOffsets={piece.rowOffsets} moveRows={moveRows} selectedRow={selectedRow} onSelectRow={setSelectedRow} onRowMove={(row,value) => setProject(p=>({...p,pieces:p.pieces.map(x=>x.id===piece.id?{...x,rowOffsets:{...x.rowOffsets,[row]:value}}:x)}))} onRowDragStart={() => {setPast(p=>[...p.slice(-49),project]);setFuture([]);}} onRowDragEnd={() => {}} visibleRounds={visibleRounds} thickness={thickness} mode={mode} selectedStitch={selected?.id ?? null} selectedStitches={selection} paintTool={paint&&colorTool!=='select'?colorTool:'inspect'} brushColor={color} canPaint={!errors.length} onBrush={brushStitches} onSample={sampleColor} onSelect={select}/>:<StitchChart pattern={parsed} visibleRounds={visibleRounds} selection={selection} tool={paint&&colorTool!=='select'?colorTool:'inspect'} color={color} canPaint={!errors.length} onSelect={select} onBrush={brushStitches} onSample={sampleColor}/>}
+          {view!=='assembly' && paint && colorTool==='select' && <div className="color-scope"><span>SELECT BY</span>{(['Stitch','Multi','Patch','Round','Whole piece'] as ColorScope[]).map(s => <button className={scope===s?'active':''} key={s} onClick={() => {setScope(s);setSelection([]);}}>{s}</button>)}</div>}
+          {view!=='assembly' && moveRows && <div className="row-control">{selectedRow ? <><strong>Round {selectedRow}</strong><label>Height<input aria-label="Row height" type="number" step="0.1" value={piece.rowOffsets[selectedRow]??0} onChange={e=>update({...project,pieces:project.pieces.map(p=>p.id===piece.id?{...p,rowOffsets:{...p.rowOffsets,[selectedRow]:Number(e.target.value)}}:p)})}/></label><button onClick={()=>update({...project,pieces:project.pieces.map(p=>p.id===piece.id?{...p,rowOffsets:{}}:p)})}>Reset rounds</button></>:'Click a round, then drag the height handle.'}</div>}
+          <div className="view-label"><span className="dot"/>{view==='assembly'?`${project.pieces.length} pieces`:piece.name}<span>·</span>{view==='assembly'?'Assembly':mode==='stitches'?'Finished fabric':'Stitch structure'}</div>
+          <div className="zoom-controls"><button title="Zoom in" onClick={() => viewer.current?.zoomIn()}><Plus size={16}/></button><button title="Zoom out" onClick={() => viewer.current?.zoomOut()}><Minus size={16}/></button><button title="Front view" onClick={() => viewer.current?.frontView()}><RotateCcw size={15}/></button></div>
+          <div className="viewport-hint">{view==='assembly'?(assemblyTool==='place'?'Click the main piece to attach · Esc to cancel':assemblyTool==='translate'?'Drag an arrow to move · Drag a square for two axes':assemblyTool==='rotate'?'Drag a colored ring to rotate the selected piece':'Drag to rotate · Click a piece to select'):paint ? (colorTool==='brush'?(view==='chart'?'Drag across cells to paint whole stitches':'Drag to paint whole stitches · Right-drag to rotate'):colorTool==='sample'?'Click a stitch to copy its exact yarn color':selection.length ? `${selection.length} stitch${selection.length===1?'':'es'} selected · choose a yarn below` : 'Click a stitch, then choose a yarn color') : 'Drag to rotate · Scroll to zoom · Click to inspect'}</div>
         </div>
-      </header>
-
-      <main className="workspace">
-        <div className="workspace-heading">
-          <div>
-            <div className="eyebrow">
-              <span /> A LITTLE CODE. A WORLD OF STITCHES.
-            </div>
-            <h1>Your next idea, in the making.</h1>
-            <p>Write a crochet pattern. Watch it take shape.</p>
-          </div>
-          <div className="workspace-actions">
-            <button
-              className="button new-button"
-              onClick={() =>
-                loadSource(
-                  "# Untitled pattern\n# Start something handmade\n\n[sage]\n1: 6 sc in mc (6)\n2: 6 inc (12)\n3: 12 sc (12)",
-                )
-              }
-            >
-              <Plus size={15} /> New pattern
-            </button>
-            <div className="dropdown-container" data-dropdown>
-              <button
-                className="button examples-button"
-                aria-expanded={menu === "examples"}
-                onClick={() => setMenu(menu === "examples" ? null : "examples")}
-              >
-                <Layers3 size={15} />
-                <span>Explore examples</span>
-                <ChevronDown size={14} />
-              </button>
-              {menu === "examples" && (
-                <div className="dropdown examples-menu">
-                  <span className="dropdown-heading">
-                    A FEW PLACES TO START
-                  </span>
-                  {EXAMPLES.map((example) => (
-                    <button
-                      key={example.id}
-                      onClick={() => {
-                        loadSource(example.source);
-                        setToast(
-                          `Loaded ${example.name.toLowerCase()}. Make it your own.`,
-                        );
-                      }}
-                    >
-                      <span className={`example-icon ${example.id}`}>
-                        <Layers3 size={19} />
-                      </span>
-                      <span>
-                        {example.name}
-                        <small>{example.description}</small>
-                      </span>
-                      {compiled.name === example.name && (
-                        <Check size={15} className="example-check" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="workbench">
-          <section className="editor-panel panel" aria-label="Pattern editor">
-            <div className="panel-heading">
-              <div className="panel-label">
-                <Braces size={17} />
-                <h2>Pattern editor</h2>
-              </div>
-              <div
-                className="editor-format-toggle"
-                aria-label="Pattern editing format"
-              >
-                <button
-                  className={editorMode === "worksheet" ? "active" : ""}
-                  aria-pressed={editorMode === "worksheet"}
-                  onClick={() => {
-                    setWorksheetEditingLine(null);
-                    setEditorMode("worksheet");
-                  }}
-                >
-                  Worksheet
-                </button>
-                <button
-                  className={editorMode === "code" ? "active" : ""}
-                  aria-pressed={editorMode === "code"}
-                  onClick={() => {
-                    setWorksheetEditingLine(null);
-                    setEditorMode("code");
-                  }}
-                >
-                  Code
-                </button>
-              </div>
-              <button
-                className="icon-button help-button"
-                aria-label="Open syntax guide"
-                title="Syntax guide"
-                onClick={() => setHelp("syntax")}
-              >
-                <CircleHelp size={16} />
-              </button>
-            </div>
-            <div className="file-tab">
-              <FileText size={13} />
-              <span>pattern.crochet</span>
-              <span
-                className={`file-dot ${dirty ? "dirty" : ""}`}
-                title={dirty ? "Unrendered changes" : "Up to date"}
-              />
-              <span className="file-language">
-                {editorMode === "worksheet" ? "AUTOMATIC COUNTS" : "CROCHET"}
-              </span>
-            </div>
-            <div className="editor-content">
-              {editorMode === "worksheet" ? (
-                <PatternWorksheet
-                  onEditingChange={setWorksheetEditingLine}
-                  value={source}
-                  onChange={(value) => {
-                    setSource(value);
-                    setSelectedStitch(null);
-                  }}
-                  diagnostics={draft.diagnostics}
-                  onRender={renderPattern}
-                  selectedLine={!dirty ? (selected?.sourceLine ?? null) : null}
-                />
-              ) : (
-                <PatternEditor
-                  value={source}
-                  onChange={(value) => {
-                    setSource(value);
-                    setSelectedStitch(null);
-                  }}
-                  diagnostics={draft.diagnostics}
-                  onRender={renderPattern}
-                  selectedLine={!dirty ? (selected?.sourceLine ?? null) : null}
-                />
-              )}
-            </div>
-            <div
-              className={`validation-strip ${errors.length && !pendingWorksheet ? "has-error" : warning && draft.rounds.length ? "has-warning" : ""}`}
-              aria-live="polite"
-            >
-              {pendingWorksheet ? (
-                <>
-                  <span className="validation-icon">
-                    <Braces size={10} />
-                  </span>
-                  <span>Finish this instruction to update the preview.</span>
-                </>
-              ) : errors.length ? (
-                <>
-                  <AlertCircle size={15} />
-                  <div>
-                    <strong>
-                      Line {errors[0].line} needs a little attention
-                    </strong>
-                    <span>{errors[0].message}</span>
-                  </div>
-                </>
-              ) : warning && draft.rounds.length ? (
-                <>
-                  <AlertCircle size={14} />
-                  <span>{warning.message}</span>
-                </>
-              ) : (
-                <>
-                  <span className="validation-icon">
-                    <Check size={11} strokeWidth={2.5} />
-                  </span>
-                  <span>
-                    {draft.rounds.length
-                      ? "All stitch counts add up"
-                      : "Your canvas is ready. Add a first round."}
-                  </span>
-                  {!!draft.rounds.length && (
-                    <span className="valid-rounds">
-                      {draft.rounds.length} rounds
-                    </span>
-                  )}
-                </>
-              )}
-            </div>
-            <div className="editor-actions">
-              <label className="auto-render">
-                <input
-                  type="checkbox"
-                  checked={autoRender}
-                  onChange={(event) => setAutoRender(event.target.checked)}
-                />
-                <span className="switch" />
-                <span>Auto-render</span>
-              </label>
-              <button
-                className="button render-button"
-                aria-label="Render pattern"
-                aria-keyshortcuts="Control+Enter Meta+Enter"
-                onClick={renderPattern}
-                disabled={!!errors.length}
-              >
-                <Play size={13} fill="currentColor" />
-                {rendering ? "Rendered" : "Render pattern"}
-                <kbd>⌘ ↵</kbd>
-              </button>
-            </div>
-          </section>
-
-          <section
-            className="preview-panel panel"
-            ref={previewPanel}
-            aria-label="3D model preview"
-          >
-            <div className="panel-heading preview-heading">
-              <div className="panel-label">
-                <Box size={17} />
-                <h2>3D preview</h2>
-              </div>
-              <div className="preview-tools">
-                <div className="view-toggle" aria-label="Model display mode">
-                  <button
-                    className={mode === "stitches" ? "active" : ""}
-                    aria-pressed={mode === "stitches"}
-                    onClick={() => setMode("stitches")}
-                  >
-                    <span className="stitch-view-icon" />
-                    Stitches
-                  </button>
-                  <button
-                    className={mode === "structure" ? "active" : ""}
-                    aria-pressed={mode === "structure"}
-                    onClick={() => setMode("structure")}
-                  >
-                    <Box size={13} />
-                    Structure
-                  </button>
-                </div>
-                <button
-                  className={`icon-button row-mode-button ${moveRows ? "active" : ""}`}
-                  aria-label="Move rows"
-                  title="Select and move rows"
-                  aria-pressed={moveRows}
-                  onClick={() => {
-                    setMoveRows(!moveRows);
-                    setSelectedStitch(null);
-                    setPlaying(false);
-                  }}
-                >
-                  <MoveVertical size={17} />
-                  <span className="row-mode-label">Move rows</span>
-                </button>
-                <span className="toolbar-divider" />
-                <button
-                  className="icon-button"
-                  aria-label="Reset camera"
-                  title="Reset view"
-                  onClick={() => viewer.current?.resetView()}
-                >
-                  <RotateCcw size={15} />
-                </button>
-                <button
-                  className="icon-button fullscreen-button"
-                  aria-label="Toggle fullscreen"
-                  title="Full screen"
-                  onClick={() => {
-                    if (document.fullscreenElement)
-                      void document.exitFullscreen();
-                    else
-                      void previewPanel.current
-                        ?.requestFullscreen()
-                        .catch(() =>
-                          setToast(
-                            "Full screen is unavailable in this browser.",
-                          ),
-                        );
-                  }}
-                >
-                  <Maximize2 size={15} />
-                </button>
-              </div>
-            </div>
-            <div className="canvas-area">
-              <div className="model-meta">
-                <span className="model-tag">
-                  <span
-                    className={`status-dot ${errors.length ? "error" : ""}`}
-                  />
-                  {errors.length
-                    ? "LAST VALID PREVIEW"
-                    : dirty
-                      ? "CHANGES PENDING"
-                      : "LIVE PREVIEW"}
-                </span>
-                <h3>{compiled.name || "Untitled pattern"}</h3>
-                <span className="model-subtitle">
-                  {compiled.stitches.length.toLocaleString()} stitches{" "}
-                  <span>·</span> {roundCount} rounds <span>·</span>{" "}
-                  {colors.length} {colors.length === 1 ? "color" : "colors"}
-                </span>
-              </div>
-              <ModelViewer
-                ref={viewer}
-                model={geometry.points.length ? geometry : null}
-                safetyEyes={compiled.eyes}
-                visibleRounds={currentRound}
-                thickness={thickness}
-                mode={mode}
-                selectedStitch={selectedStitch}
-                onSelect={setSelectedStitch}
-                rowOffsets={rowOffsets}
-                moveRows={moveRows}
-                selectedRow={selectedRow}
-                onSelectRow={(row) => {
-                  setSelectedRow(row);
-                  setSelectedStitch(null);
-                  setPlaying(false);
-                }}
-                onRowMove={moveRow}
-                onRowDragStart={startRowMove}
-                onRowDragEnd={endRowMove}
-              />
-              {moveRows && (
-                <div
-                  className="row-edit-card"
-                  aria-label="Row movement controls"
-                >
-                  <div className="row-edit-title">
-                    <MoveVertical size={14} />
-                    <strong>Move a row</strong>
-                    <button
-                      className="icon-button"
-                      aria-label="Exit row movement"
-                      onClick={() => setMoveRows(false)}
-                    >
-                      <X size={13} />
-                    </button>
-                  </div>
-                  <select
-                    aria-label="Selected row"
-                    value={selectedRow ?? ""}
-                    onChange={(e) =>
-                      setSelectedRow(
-                        e.target.value ? Number(e.target.value) : null,
-                      )
-                    }
-                  >
-                    <option value="">Click a row line…</option>
-                    {compiled.rounds
-                      .filter((r) => r.number <= currentRound)
-                      .map((r) => (
-                        <option value={r.number} key={r.number}>
-                          Round {r.number} · {r.outputCount} stitches
-                        </option>
-                      ))}
-                  </select>
-                  {selectedRow !== null ? (
-                    <>
-                      <label className="row-offset-label">
-                        Vertical offset
-                        <RowOffsetInput
-                          value={rowOffsets[selectedRow] || 0}
-                          onCommit={(value) => stepRow(selectedRow, value)}
-                        />
-                      </label>
-                      <div className="row-step-buttons">
-                        <button
-                          onClick={() =>
-                            stepRow(
-                              selectedRow,
-                              (rowOffsets[selectedRow] || 0) + 0.25,
-                            )
-                          }
-                          aria-label="Move selected row up"
-                        >
-                          ↑ Up
-                        </button>
-                        <button
-                          onClick={() =>
-                            stepRow(
-                              selectedRow,
-                              (rowOffsets[selectedRow] || 0) - 0.25,
-                            )
-                          }
-                          aria-label="Move selected row down"
-                        >
-                          ↓ Down
-                        </button>
-                        <button
-                          onClick={() => stepRow(selectedRow, 0)}
-                          disabled={!rowOffsets[selectedRow]}
-                        >
-                          Reset row
-                        </button>
-                      </div>
-                      <p>
-                        Drag the green arrow or the highlighted line. ↑ / ↓
-                        nudge; Shift moves faster.
-                      </p>
-                    </>
-                  ) : (
-                    <p>
-                      Grab a row line, then drag up or down. Only that row
-                      moves.
-                    </p>
-                  )}
-                  <div className="row-edit-footer">
-                    <button onClick={() => viewer.current?.frontView()}>
-                      Front view
-                    </button>
-                    <button
-                      aria-label="Undo row move"
-                      disabled={!rowHistory.length}
-                      onClick={undoRowMove}
-                    >
-                      <Undo2 size={11} /> Undo
-                    </button>
-                    <button
-                      disabled={!Object.keys(rowOffsets).length}
-                      onClick={() => {
-                        startRowMove();
-                        applyRowOffsets({});
-                        endRowMove();
-                      }}
-                    >
-                      Reset all
-                    </button>
-                  </div>
-                  <small>Shape adjustment · pattern counts stay the same</small>
-                </div>
-              )}
-              <div className="view-corner">
-                <svg
-                  className="axis-gizmo"
-                  width="52"
-                  height="52"
-                  viewBox="0 0 52 52"
-                  aria-label="3D axes"
-                >
-                  <path d="M26 29V8" stroke="#6d8e7a" />
-                  <path d="m26 29 18 9" stroke="#bc796a" />
-                  <path d="m26 29-17 9" stroke="#8a98ab" />
-                  <circle cx="26" cy="29" r="2.5" fill="#9aa39b" />
-                  <text x="23" y="7" fill="#6d8e7a">
-                    Y
-                  </text>
-                  <text x="44" y="43" fill="#bc796a">
-                    X
-                  </text>
-                  <text x="3" y="43" fill="#8a98ab">
-                    Z
-                  </text>
-                </svg>
-                <span>Perspective</span>
-              </div>
-              <div className="zoom-controls">
-                <button
-                  className="icon-button"
-                  aria-label="Zoom in"
-                  title="Zoom in"
-                  onClick={() => viewer.current?.zoomIn()}
-                >
-                  <Plus size={16} />
-                </button>
-                <span />
-                <button
-                  className="icon-button"
-                  aria-label="Zoom out"
-                  title="Zoom out"
-                  onClick={() => viewer.current?.zoomOut()}
-                >
-                  <Minus size={16} />
-                </button>
-              </div>
-              {selected && selected.round <= currentRound && (
-                <div className="stitch-inspector">
-                  <div>
-                    <span className="eyebrow">A CLOSER LOOK</span>
-                    <button
-                      className="icon-button"
-                      aria-label="Close stitch details"
-                      onClick={() => setSelectedStitch(null)}
-                    >
-                      <X size={13} />
-                    </button>
-                  </div>
-                  <strong>
-                    <span style={{ background: selected.color }} />
-                    {selected.isIncrease
-                      ? "Increase stitch"
-                      : STITCH_NAMES[selected.type]}
-                  </strong>
-                  <p>
-                    Round {selected.round}
-                    <span>·</span>{selected.branch ? `Branch ${selected.branch.returning ? "return" : "chain"} ${selected.branch.step}` : `Stitch ${selected.index + 1}`}
-                    <span>·</span>Line {selected.sourceLine}
-                  </p>
-                  <small>
-                    {selected.parents.length === 2
-                      ? "Joined to two stitches below"
-                      : selected.isIncrease
-                        ? "Shares its parent with another stitch"
-                        : selected.parents.length
-                          ? "Worked into one stitch below"
-                          : "Worked into the magic ring"}
-                  </small>
-                </div>
-              )}
-              <span className="canvas-hint">
-                <MousePointer2 size={12} />
-                {moveRows ? (
-                  "Grab a row line · Drag vertically · Esc to cancel"
-                ) : (
-                  <>
-                    Drag to rotate<span>·</span>Scroll to zoom<span>·</span>
-                    Click a stitch
-                  </>
-                )}
-              </span>
-            </div>
-            <StitchLegend types={visibleStitchTypes} />
-            <SafetyEyeControls
-              source={source}
-              pattern={draft}
-              selected={!dirty ? selected : null}
-              onChange={(next) => { setSource(next); setSelectedStitch(null); }}
-            />
-            <div className="playback-bar">
-              <button
-                className={`play-button ${playing ? "playing" : ""}`}
-                aria-label={
-                  playing ? "Pause round playback" : "Play round playback"
-                }
-                disabled={!roundCount}
-                onClick={() => {
-                  if (!playing && currentRound >= roundCount)
-                    setVisibleRounds(1);
-                  setPlaying(!playing);
-                }}
-              >
-                {playing ? (
-                  <Pause size={14} fill="currentColor" />
-                ) : (
-                  <Play size={14} fill="currentColor" />
-                )}
-              </button>
-              <div className="playback-label">
-                <span>BUILD IT ROUND BY ROUND</span>
-                <strong>
-                  {roundCount ? (
-                    <>
-                      Round {currentRound} <span>/ {roundCount}</span>
-                    </>
-                  ) : (
-                    "No rounds yet"
-                  )}
-                </strong>
-              </div>
-              <button
-                className="icon-button round-step"
-                aria-label="Previous round"
-                disabled={currentRound <= 1}
-                onClick={() => {
-                  setPlaying(false);
-                  setVisibleRounds(currentRound - 1);
-                }}
-              >
-                <ChevronLeft size={15} />
-              </button>
-              <input
-                className="round-slider"
-                aria-label="Visible rounds"
-                type="range"
-                min="1"
-                max={roundCount || 1}
-                value={currentRound}
-                style={
-                  {
-                    "--progress": `${((currentRound - 1) / Math.max(1, roundCount - 1)) * 100}%`,
-                  } as React.CSSProperties
-                }
-                onChange={(event) => {
-                  setPlaying(false);
-                  setVisibleRounds(Number(event.target.value));
-                  setSelectedStitch(null);
-                }}
-              />
-              <button
-                className="icon-button round-step"
-                aria-label="Next round"
-                disabled={currentRound >= roundCount}
-                onClick={() => {
-                  setPlaying(false);
-                  setVisibleRounds(currentRound + 1);
-                }}
-              >
-                <ChevronRight size={15} />
-              </button>
-              <button
-                className="show-all"
-                disabled={!roundCount}
-                onClick={() => {
-                  setPlaying(false);
-                  setVisibleRounds(roundCount);
-                }}
-              >
-                Show all <ArrowRight size={12} />
-              </button>
-            </div>
-            <div className="display-bar">
-              <div className="yarn-colors">
-                <span className="display-label">YOUR YARN</span>
-                {colors.slice(0, 4).map((color) => (
-                  <span
-                    className="yarn-color"
-                    key={color.color}
-                    title={`${color.name}: ${color.count} stitches`}
-                  >
-                    <span style={{ background: color.color }} />
-                    {color.name}
-                    <small>{color.count}</small>
-                  </span>
-                ))}
-                {colors.length > 4 && <small>+{colors.length - 4}</small>}
-              </div>
-              <label className="orientation-control">
-                <span>First round</span>
-                <select
-                  aria-label="Model orientation"
-                  value={draft.orientation}
-                  onChange={(event) => {
-                    const orientation = event.target.value as PatternOrientation;
-                    setSource((value) => setPatternOrientation(value, orientation));
-                    setCompiledSource((value) => setPatternOrientation(value, orientation));
-                  }}
-                >
-                  <option value="bottom-up">At bottom</option>
-                  <option value="top-down">At top</option>
-                </select>
-              </label>
-              <label className="thickness-control">
-                <span>Stitch size</span>
-                <input
-                  type="range"
-                  aria-label="Stitch size"
-                  min="0.6"
-                  max="1.65"
-                  step="0.05"
-                  value={thickness}
-                  onChange={(event) => setThickness(Number(event.target.value))}
-                />
-                <span>{Math.round(thickness * 100)}%</span>
-              </label>
-            </div>
-          </section>
-        </div>
-        <div className="workspace-footnote">
-          <span>
-            <Sparkles size={13} /> Made for the ideas you haven’t crocheted yet.
-          </span>
-          <button onClick={() => setHelp("model")}>
-            <span className="tiny-info">i</span> How this preview works
-          </button>
-        </div>
-      </main>
-      <footer className="status-bar">
-        <span>
-          <span className="status-dot" />
-          All the making happens in your browser.
-        </span>
-        <span>
-          US crochet terms
-          <span className="status-separator" />
-          {source.split("\n").length} lines
-          <span className="status-separator" />
-          Loopform v0.1
-        </span>
-      </footer>
-
-      <input
-        ref={fileInput}
-        type="file"
-        accept=".crochet,.txt,.json"
-        className="visually-hidden"
-        aria-label="Open pattern file"
-        onChange={async (event) => {
-          const file = event.target.files?.[0];
-          if (!file) return;
-          if (file.size > 500_000) {
-            setToast(
-              "This file is too large. Open a pattern or project under 500 KB.",
-            );
-            event.target.value = "";
-            return;
-          }
-          try {
-            const text = await file.text();
-            if (file.name.endsWith(".json")) {
-              const project = JSON.parse(text);
-              if (project.version !== 1 || typeof project.source !== "string")
-                throw new Error(
-                  "Use a version 1 Loopform project or a plain pattern file.",
-                );
-              loadSource(project.source);
-              if (
-                !parsePattern(project.source).diagnostics.some(
-                  (d) => d.severity === "error",
-                )
-              )
-                applyRowOffsets(sanitizeRowOffsets(project.rowOffsets));
-              if (typeof project.thickness === "number")
-                setThickness(Math.min(1.65, Math.max(0.6, project.thickness)));
-            } else loadSource(text);
-            setToast(`Opened ${file.name}.`);
-          } catch (error) {
-            setToast(
-              error instanceof Error
-                ? error.message
-                : "This file could not be opened.",
-            );
-          }
-          event.target.value = "";
-        }}
-      />
-
-      {toast && (
-        <div className="toast" role="status">
-          <Check size={15} />
-          <span>{toast}</span>
-          <button
-            aria-label="Dismiss notification"
-            onClick={() => setToast("")}
-          >
-            <X size={14} />
-          </button>
-        </div>
-      )}
-      {help && (
-        <div
-          className="modal-overlay"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setHelp(null);
-          }}
-        >
-          <section
-            className="help-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="help-title"
-          >
-            <button
-              className="modal-close icon-button"
-              autoFocus
-              aria-label="Close guide"
-              onClick={() => setHelp(null)}
-            >
-              <X size={19} />
-            </button>
-            <div className="modal-icon">
-              {help === "syntax" ? <Braces size={25} /> : <Box size={25} />}
-            </div>
-            <span className="eyebrow">A SMALL GUIDE TO MAKING</span>
-            <h2 id="help-title">
-              {help === "syntax"
-                ? "Your stitches, in a few words."
-                : "From stitches to shapes."}
-            </h2>
-            {help === "syntax" ? (
-              <>
-                <p>
-                  Write one round per line using US crochet terms. Counts in
-                  parentheses are checked against your instructions.
-                </p>
-                <pre>
-                  <span># My first little shape</span>
-                  {
-                    "\n[sage]\n1: 6 sc in mc (6)\n2: 6 inc (12)\n3: [1 sc, 1 inc] rep 6 times (18)"
-                  }
-                </pre>
-                <div className="syntax-grid">
-                  {[
-                    ["sc", "Single crochet"],
-                    ["hdc", "Half double crochet"],
-                    ["dc / tr", "Double / treble crochet"],
-                    ["bobble / bbl", "Raised 3-DC bobble"],
-                    ["inc", "2 sc into one stitch"],
-                    ["dec", "Join 2 stitches into one"],
-                    ["in mc", "Magic-ring foundation"],
-                  ].map(([code, name]) => (
-                    <div key={code}>
-                      <code>{code}</code>
-                      <span>{name}</span>
-                    </div>
-                  ))}
-                </div>
-                <p className="guide-note">
-                  Use <code>[beige]</code> or <code>[#a9c6b5]</code> to change
-                  yarn color, including within a round:{" "}
-                  <code>4: [red] 9 sc, [beige] 9 sc (18)</code>.
-                  Each color applies to following stitches until the next color
-                  change, even across rounds. Color changes also work inside
-                  repeats. Repeats can be nested. Start comments with{" "}
-                  <code>//</code> or <code>#</code>.
-                </p>
-                <p className="guide-note">
-                  Work two stitches into one parent with <code>[bobble, sc] in same st</code>.
-                  Add an external tail with <code>branch(12 ch, 11 slst)</code>;
-                  the chain and return stitches stay outside the body-round total.
-                  Use <code>branch(12 ch)</code> for an open chain extension.
-                </p>
-                <p className="guide-note">
-                  Use the Safety eyes controls below the preview, or write{" "}
-                  <code>eyes between 5 and 6 at 10, 14 size 0.8</code> on its own line.
-                  Eyes sit after the numbered stitches, with four intervening stitches in this example.
-                </p>
-                <div className="guide-shortcut">
-                  <kbd>⌘ / Ctrl</kbd>
-                  <kbd>Enter</kbd>
-                  <span>Render your pattern at any time</span>
-                </div>
-              </>
-            ) : (
-              <>
-                <p>
-                  Every instruction becomes a stitch with an exact connection to
-                  the stitches below it. Increases share a parent; decreases
-                  join two parents.
-                </p>
-                <div className="model-explainer">
-                  <span>Pattern</span>
-                  <ArrowRight size={16} />
-                  <span>Connections</span>
-                  <ArrowRight size={16} />
-                  <span>3D shape</span>
-                </div>
-                <p>
-                  The preview arranges stitches around a circular profile using
-                  round counts, attachment locations and stitch heights. Half
-                  double and taller stitches create more height than single
-                  crochet. Round bubbles mark single crochet; elongated beads
-                  mark half double, double and treble crochet in increasing
-                  lengths. The shape key identifies the stitches in view while
-                  yarn colors follow your pattern.
-                </p>
-                <p className="guide-note">
-                  This first version is an approximate preview for patterns
-                  worked in continuous rounds. It isn’t a calibrated yarn or
-                  stuffing simulation. Flat rows, turns, BLO/FLO, sewing and
-                  special decrease types are not supported yet. Changing “Stitch
-                  size” changes the display, not your pattern or gauge.
-                </p>
-              </>
-            )}
-            <button className="button modal-done" onClick={() => setHelp(null)}>
-              Let’s make something <ArrowRight size={15} />
-            </button>
-          </section>
-        </div>
-      )}
+        {view==='assembly'?<AssemblyControls pieces={project.pieces} active={piece} placement={placement} tool={assemblyTool} anchorMissing={!!placement.anchor&&!findAnchor(mainModel,placement)} onSelect={selectPiece} onChange={changePlacement} onAttach={startAttachment} onDetach={()=>{changePlacement(detachPlacement(placement,mainPiece.placement??identityPlacement(),mainModel));setAssemblyTool('select');}} onAddEar={()=>addPiece(earPattern(parsePattern(mainPiece.source).stitches[0]?.color),'Ear')} onDuplicate={duplicatePiece} onVisibility={()=>update({...project,pieces:project.pieces.map(p=>p.id===piece.id?{...p,hidden:!p.hidden}:p)})}/>:<><YarnPalette color={color} palette={PALETTE} usedColors={usedColors} painting={paint} tool={colorTool} canPaint={!errors.length} selectionCount={selection.length} selectionLabel={selected?`${selection.length} selected · Round ${selected.round}, stitch ${selected.index+1}`:'Select stitches, then apply a yarn color'} onColor={chooseColor} onTool={useColorTool} onApply={()=>applyColor()} onMatch={()=>{useColorTool('select');setSelection(parsed.stitches.filter(s=>s.color.toLowerCase()===color.toLowerCase()).map(s=>s.id));}}/>
+        <div className="playback"><button className="play-button" aria-label={playing?'Pause playback':'Play construction'} disabled={!rounds} onClick={()=>{if(!playing && visibleRounds>=rounds)setRoundLimit(1);setPlaying(!playing);}}>{playing?<Pause size={13}/>:<Play size={13}/>}</button><span>Round <strong>{visibleRounds}</strong> / {rounds}</span><input aria-label="Visible rounds" type="range" min={1} max={Math.max(1,rounds)} value={Math.max(1,visibleRounds)} onChange={e=>{setRoundLimit(Number(e.target.value));setPlaying(false);setSelection([]);}}/><button onClick={()=>{setRoundLimit(150);setPlaying(false);}}>Show all</button></div></>}
+        <div className="render-settings"><button onClick={()=>setBackdrop(backdrop==='dark'?'light':'dark')}>{backdrop==='dark'?'Light backdrop':'Dark backdrop'}</button><label>Yarn size<input aria-label="Yarn size" type="range" min="0.7" max="1.4" step="0.05" value={thickness} onChange={e=>setThickness(Number(e.target.value))}/></label>{view!=='assembly'&&<button onClick={()=>setMode(mode==='stitches'?'structure':'stitches')}>{mode==='stitches'?'Show structure':'Show yarn'}</button>}</div>
+      </section>
     </div>
-  );
+    <section className={`validation ${errors.length?'has-errors':''}`} aria-live="polite"><div><span className="validation-icon">{errors.length?<CircleHelp size={19}/>:<CheckCircle2 size={19}/>}</span><div><strong>{errors.length?'Let’s check that round':parsed.diagnostics.length?'A small note before you continue':'Every stitch adds up'}</strong><p>{parsed.diagnostics[0]?.message ?? 'Your rounds are in order and all stitch counts match. Ready for your next idea.'}</p></div></div><span>{errors.length ? `Line ${errors[0].line}` : `${rounds} rounds checked`}<Check size={14}/></span></section>
+    <footer className="app-footer"><span><span className="dot"/>Made for making. Saved in your browser.</span><span>US crochet terms <i>·</i> Loopform Studio</span></footer>
+    <input type="file" ref={input} hidden accept=".json,.txt,.crochet" aria-label="Open project file" onChange={async e=>{const file=e.target.files?.[0];if(!file)return;try{if(file.size>4000000)throw new Error('Choose a file under 4 MB.');const text=await file.text();if(file.name.endsWith('.json')){const data=JSON.parse(text);if(validProject(data)){update({...data,pieces:data.pieces.map(p=>({...p,rowOffsets:sanitizeRowOffsets(p.rowOffsets)}))});}else if(typeof data.source==='string'&&data.source.length<=120000)addPiece(data.source,file.name.replace(/\.[^.]+$/,''));else throw new Error('This is not a Loopform project.');}else{if(text.length>120000)throw new Error('Keep each piece under 120,000 characters.');addPiece(text,file.name.replace(/\.[^.]+$/,''));}setToast('Pattern opened.');}catch(err){setToast((err as Error).message);}e.target.value='';}}/>
+    {eyeDialog&&<SafetyEyesDialog source={source} pattern={parsed} pieceName={piece.name} selected={selected} pair={eyeDialog.pair} onClose={()=>setEyeDialog(null)} onSave={(next,index)=>{changeSource(next);setEyeDialog(null);setEditorMode('code');setView('3d');setRoundLimit(150);setPlaying(false);setPaint(false);setMoveRows(false);setMode('stitches');setFocusEyes(index);setToast('Safety eyes saved in the pattern and added to the 3D model.');}}/>}
+    {menu && <div className="modal-backdrop" onClick={()=>setMenu(null)}><div className={`modal ${menu==='help'?'help-modal':''}`} role="dialog" aria-modal="true" aria-label={menu==='examples'?'Starter patterns':menu==='export'?'Export project':'Pattern guide'} onClick={e=>e.stopPropagation()}><button className="modal-close icon" aria-label="Close dialog" onClick={()=>setMenu(null)}><X size={18}/></button>{menu==='examples'?<><span className="eyebrow">A LITTLE INSPIRATION</span><h2>Start with something lovely.</h2><p>Open a pattern as a new piece in your project.</p><div className="example-list">{STUDIO_EXAMPLES.map(ex=><button key={ex.name} onClick={()=>{addPiece(ex.source,ex.name);setMenu(null);}}><span className="example-icon">◎</span><span><strong>{ex.name}</strong><small>{ex.description}</small></span><Plus size={16}/></button>)}</div></>:menu==='export'?<><span className="eyebrow">TAKE YOUR IDEAS WITH YOU</span><h2>Export your creation</h2><p>Project files include every piece, color, accessory, and attachment.</p><div className="export-list"><button onClick={()=>{download(`${safeName}.loopform.json`,JSON.stringify(project,null,2),'application/json');setMenu(null);}}><FolderOpen/><span><strong>Loopform project</strong><small>Editable project · JSON</small></span><Download/></button><button onClick={()=>{download(`${safeName}.txt`,project.pieces.map(p=>`// PIECE: ${p.name}\n${p.source}`).join('\n\n'));setMenu(null);}}><BookOpen/><span><strong>Pattern text</strong><small>All pieces and exact stitch colors · TXT</small></span><Download/></button><button onClick={()=>{viewer.current?.exportImage();setMenu(null);}} disabled={view==='chart'}><Box/><span><strong>Preview image</strong><small>Current view · piece or assembly · PNG</small></span><Download/></button></div></>:<><span className="eyebrow">FROM THE FIRST LOOP</span><h2>Your pattern, made visible.</h2><p>Write one round per line. Increases widen the piece; decreases close it. Counts and the 3D preview update as you type.</p><pre>{'start: magic ring\nRound 1: 6 sc in mr → 6\nRound 2: 6 inc → 12\nRound 3: (sc, inc) x6 → 18\nRound 4-6: 18 sc → 18'}</pre><h3>Make every stitch your own</h3><p>Choose Color → Brush, pick a yarn, and drag across the model or chart. Every touched stitch is colored in full, and each drag is one undo step. Right-drag rotates the model; Explore returns to normal orbiting. Escape cancels an unfinished stroke. Use Eyedropper or Alt-click to copy a stitch’s exact stored yarn color, unaffected by lighting. The hex field and In this piece swatches let you reuse the same shade. Select mode keeps Multi, Patch, Round, and Whole piece selections.</p><p>Painting adds editable <code>paint round: stitch=#color</code> lines to your pattern, preserving increases and repeats. Choose a used yarn and Select matching to select every stitch in that shade; pick a replacement and Apply yarn.</p><h3>Safety eyes</h3><p>Choose Safety eyes from the stitch library. Set the round gap, the stitch gap for each eye, and the diameter in millimeters. Confirm to update the pattern and show the eyes in 3D. Preview scale adjusts the stitch width for your yarn. Edit or remove eyes under Piece settings & accessories.</p><h3>Pieces & saving</h3><p>Each tab has its own pattern. Use Assembly to see all pieces together; the first tab is your main piece. Add an ear or any custom piece, select Place on main piece, then click a stitch where it should join. Choose the joining edge, and use Move / Rotate handles or numeric controls to adjust it. Attachments follow the main piece as you edit or move it. Duplicate for a matching second ear, then choose its new placement. Your project saves here automatically; Save project downloads a portable backup with the full assembly.</p><p className="help-note">The model estimates shape from stitch counts. Yarn, tension, stuffing, and sewing affect the finished object.</p></>}</div></div>}
+    {toast && <div className="toast" role="status"><CheckCircle2 size={16}/>{toast}</div>}
+  </div>;
 }

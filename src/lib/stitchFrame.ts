@@ -48,6 +48,26 @@ export function buildStitchFrames(
       else axis.normalize();
     }
     const rotation = new Quaternion().setFromUnitVectors(up, axis);
+    if (placePosts && !point.branch) {
+      const outward = new Vector3().fromArray(point.position).sub(roundCenters.get(point.round)?.sum ?? new Vector3());
+      outward.y = 0;
+      if (outward.lengthSq() > 1e-8) {
+        outward.normalize();
+        if (!parents.length && point.round === 1) axis.copy(outward);
+        // Preserve the exact parent axis; project the surface normal onto its
+        // perpendicular plane so tall posts still meet their parent stitches.
+        const normal = outward.clone().addScaledVector(axis, -outward.dot(axis));
+        if (normal.lengthSq() < 1e-8) {
+          const first = roundCenters.get(1)?.sum.y ?? 0;
+          const second = roundCenters.get(2)?.sum.y ?? first + 1;
+          normal.set(0, first > second ? 1 : -1, 0);
+          normal.addScaledVector(axis, -normal.dot(axis));
+        }
+        normal.normalize();
+        const tangent = new Vector3().crossVectors(axis, normal).normalize();
+        rotation.setFromRotationMatrix(new Matrix4().makeBasis(tangent, axis, normal));
+      }
+    }
     const scale = new Vector3().fromArray(
       getStitchAppearance(point.type).scale,
     );

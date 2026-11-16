@@ -73,7 +73,7 @@ test("two-parent stitches use their midpoint and rotated bounds contain the bead
   }
 });
 
-test("foundation, coincident and missing parents have finite upright frames", () => {
+test("foundation follows the ring surface while coincident and missing parents remain upright", () => {
   const model = buildGeometry(parsePattern("1: 6 sc in mc (6)\n2: 6 dc (6)"));
   model.points[6].position = [...model.points[0].position];
   model.points[7].parents = [9999];
@@ -83,7 +83,7 @@ test("foundation, coincident and missing parents have finite upright frames", ()
     assert.ok(
       new Vector3(0, 1, 0)
         .applyQuaternion(frame.rotation)
-        .distanceTo(new Vector3(0, 1, 0)) < 1e-10,
+        .distanceTo(id === 0 ? new Vector3(model.points[0].position[0], 0, model.points[0].position[2]).normalize() : new Vector3(0, 1, 0)) < 1e-10,
     );
     assert.ok(
       [...frame.rotation.toArray(), ...frame.extent.toArray()].every(

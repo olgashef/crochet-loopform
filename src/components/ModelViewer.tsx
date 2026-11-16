@@ -7,6 +7,9 @@ import {
   useState,
 } from "react";
 import * as THREE from "three";
+import { StitchBrush, type PaintTool } from "../lib/stitchBrush";
+import { createFabricGeometry } from "../lib/fabricGeometry";
+import { createYarnGeometry } from "../lib/yarnGeometry";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { ModelGeometry } from "../lib/geometry";
 import { getStitchAppearance } from "../lib/stitchAppearance";
@@ -19,6 +22,7 @@ import { RowManipulator } from "./RowManipulator";
 import { offsetRows, type RowOffsets } from "../lib/rowOffsets";
 
 export interface ViewerHandle {
+  focusEyePair?(index:number): void;
   resetView(): void;
   frontView(): void;
   zoomIn(): void;
@@ -40,7 +44,13 @@ export interface ViewerProps {
   thickness: number;
   mode: "stitches" | "structure";
   selectedStitch: number | null;
+  selectedStitches?: number[];
   onSelect: (id: number | null) => void;
+  paintTool?: PaintTool;
+  brushColor?: string;
+  canPaint?: boolean;
+  onBrush?: (ids:number[],color:string) => boolean;
+  onSample?: (color:string) => void;
 }
 
 type Point = ModelGeometry["points"][number];
@@ -53,6 +63,7 @@ interface ViewerRuntime {
   group: THREE.Group;
   nodes: THREE.InstancedMesh | null;
   bobbles: THREE.InstancedMesh | null;
+  fabric: THREE.Mesh | null;
   bobblePoints: Point[];
   activePoints: Point[];
   marker: THREE.Mesh;
@@ -60,6 +71,11 @@ interface ViewerRuntime {
   selectionRotation: THREE.Quaternion;
   reset: (direction?: THREE.Vector3) => void;
   rows: RowManipulator;
+  brush: StitchBrush | null;
+  previewColors: Map<number,string>;
+  stitchInstances: Map<number,number>;
+  bobbleInstances: Map<number,number>;
+  fabricVertices: Map<number,number[]>;
 }
 
 interface HoveredPoint {
@@ -67,6 +83,9 @@ interface HoveredPoint {
   round: number;
   index: number;
   type: string;
+  color: string;
+  patternColor?: string;
+  paintSourceLine?: number;
   x: number;
   y: number;
 }
@@ -129,7 +148,9 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       thickness,
       mode,
       selectedStitch,
+      selectedStitches = [],
       onSelect,
+      paintTool = "inspect", brushColor = "#f3e8d6", canPaint = true, onBrush, onSample,
       rowOffsets,
       moveRows,
       selectedRow,
@@ -178,6 +199,8 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
     framesRef.current = frames;
     const displayRef = useRef({ mode, thickness });
     const selectCallback = useRef(onSelect);
+    const paintRef = useRef({paintTool,brushColor,canPaint,onBrush,onSample});
+    paintRef.current = {paintTool,brushColor,canPaint,onBrush,onSample};
     const lastModel = useRef<ModelGeometry | null>(null);
     const [failure, setFailure] = useState<string | null>(null);
     const [hover, setHover] = useState<HoveredPoint | null>(null);
@@ -189,6 +212,15 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
     useImperativeHandle(
       ref,
       () => ({
+        focusEyePair(index:number) {
+          const pair=eyesRef.current.slice(index*2,index*2+2);
+          if(!pair.length)return;
+          const direction=new THREE.Vector3();
+          for(const eye of pair)direction.add(new THREE.Vector3().fromArray(eye.normal));
+          if(direction.lengthSq()<1e-8)direction.fromArray(pair[0].normal);
+          direction.normalize();direction.y=0.2;
+          runtime.current?.reset(direction.normalize());
+        },
         frontView() {
           runtime.current?.reset(new THREE.Vector3(0, 0, 1));
         },
@@ -279,11 +311,11 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       controls.maxDistance = 800;
       controls.maxPolarAngle = Math.PI * 0.91;
 
-      scene.add(new THREE.HemisphereLight(0xfffbef, 0xb7b2a6, 1.8));
-      const key = new THREE.DirectionalLight(0xfff2df, 2.5);
+      scene.add(new THREE.HemisphereLight(0xfffbf5, 0x887a86, 1.4));
+      const key = new THREE.DirectionalLight(0xfff6ed, 2.1);
       key.position.set(-10, 16, 10);
       scene.add(key);
-      const fill = new THREE.DirectionalLight(0xe2eeff, 1.1);
+      const fill = new THREE.DirectionalLight(0xe2e6ff, 0.55);
       fill.position.set(10, 5, -8);
       scene.add(fill);
 
@@ -292,7 +324,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       const marker = new THREE.Mesh(
         new THREE.RingGeometry(0.31, 0.35, 48),
         new THREE.MeshBasicMaterial({
-          color: "#315d4c",
+          color: "#a169b8",
           side: THREE.DoubleSide,
           depthTest: false,
           transparent: true,
@@ -344,7 +376,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         controls.target.copy(frame.target);
         camera.position
           .copy(frame.target)
-          .addScaledVector(direction, frame.distance);
+          .addScaledVector(direction, frame.distance * (modelRef.current?.points.some(p => p.branch) ? 0.84 : 0.69));
         controls.maxDistance = Math.max(800, frame.distance * 4);
         camera.near = Math.max(frame.distance / 1000, 0.01);
         camera.far = Math.max(frame.distance * 100, 1000);
@@ -360,6 +392,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         group,
         nodes: null,
         bobbles: null,
+        fabric: null,
         bobblePoints: [],
         activePoints: [],
         marker,
@@ -367,6 +400,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         selectionRotation: new THREE.Quaternion(),
         reset,
         rows: null! as RowManipulator,
+        brush: null, previewColors:new Map(), stitchInstances:new Map(), bobbleInstances:new Map(), fabricVertices:new Map(),
       };
       current.rows = new RowManipulator(
         scene,
@@ -430,22 +464,61 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
 
       const raycaster = new THREE.Raycaster();
       const pointer = new THREE.Vector2();
-      const hitTest = (event: PointerEvent) => {
+      const hitTest = (event: {clientX:number;clientY:number}) => {
         if (!current.nodes) return null;
         const rect = renderer.domElement.getBoundingClientRect();
+        if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)return null;
+        camera.updateMatrixWorld();
         pointer.set(
           ((event.clientX - rect.left) / rect.width) * 2 - 1,
           -((event.clientY - rect.top) / rect.height) * 2 + 1,
         );
         raycaster.setFromCamera(pointer, camera);
         const hit = raycaster.intersectObjects(
-          current.bobbles ? [current.nodes, current.bobbles] : [current.nodes],
+          [current.nodes, ...(current.bobbles ? [current.bobbles] : []), ...(current.fabric ? [current.fabric] : [])],
           false,
         )[0];
+        if (hit && hit.object === current.fabric) {
+          const ownership=current.fabric?.geometry.getAttribute('stitchId');
+          if(ownership && hit.faceIndex!==undefined && hit.faceIndex!==null) {
+            const id=ownership.getX(hit.faceIndex*3);
+            return current.activePoints[current.stitchInstances.get(id)??-1]??null;
+          }
+          // The backing blocks rays through tiny yarn gaps. Pick the nearest
+          // front-surface stitch instead of accidentally painting its back.
+          let closest: Point | null = null;
+          let distance = Infinity;
+          for (const point of current.activePoints) {
+            if (point.branch) continue;
+            const d = new THREE.Vector3().fromArray(point.position).distanceToSquared(hit.point);
+            if (d < distance) { distance = d; closest = point; }
+          }
+          return closest;
+        }
         return hit?.instanceId === undefined
           ? null
           : (hit.object === current.bobbles ? current.bobblePoints : current.activePoints)[hit.instanceId];
       };
+
+      function previewColor(id:number,hex:string) {
+        const shade=new THREE.Color(hex),index=current.stitchInstances.get(id),bobble=current.bobbleInstances.get(id);
+        if(index!==undefined)current.nodes?.setColorAt(index,shade);
+        if(bobble!==undefined)current.bobbles?.setColorAt(bobble,shade);
+        const colors=current.fabric?.geometry.getAttribute('color');
+        for(const vertex of current.fabricVertices.get(id)??[])colors?.setXYZ(vertex,shade.r,shade.g,shade.b);
+        if(colors)colors.needsUpdate=true;
+        if(current.nodes?.instanceColor)current.nodes.instanceColor.needsUpdate=true;
+        if(current.bobbles?.instanceColor)current.bobbles.instanceColor.needsUpdate=true;
+      }
+      current.brush=new StitchBrush(renderer.domElement,{
+        tool:()=>paintRef.current.paintTool,color:()=>paintRef.current.brushColor,enabled:()=>paintRef.current.canPaint,
+        hit:(x,y)=>hitTest({clientX:x,clientY:y}),
+        begin:()=>{setHover(null);current.previewColors.clear();},
+        preview:(ids,color)=>{for(const id of ids){current.previewColors.set(id,color);previewColor(id,color);}},
+        restore:()=>{for(const id of current.previewColors.keys()){const point=current.activePoints[current.stitchInstances.get(id)??-1];if(point)previewColor(id,point.color);}current.previewColors.clear();},
+        commit:(ids,color)=>paintRef.current.onBrush?.(ids,color)??false,
+        sample:hit=>{setHover(null);paintRef.current.onSample?.(hit.color);},
+      });
 
       let down: [number, number] | null = null;
       const pointerDown = (event: PointerEvent) => {
@@ -465,7 +538,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       const pointerMove = (event: PointerEvent) => {
         if (event.buttons) return;
         const point = hitTest(event);
-        renderer.domElement.style.cursor = point ? "pointer" : "grab";
+        renderer.domElement.style.cursor = paintRef.current.paintTool!=="inspect" ? "crosshair" : point ? "pointer" : "grab";
         if (!point) {
           setHover(null);
           return;
@@ -476,6 +549,9 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
           round: point.round,
           index: point.index,
           type: point.type,
+          color: point.color,
+          patternColor: point.patternColor,
+          paintSourceLine: point.paintSourceLine,
           x: Math.max(
             8,
             Math.min(event.clientX - rect.left + 14, rect.width - 210),
@@ -497,7 +573,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       const screenUp = new THREE.Vector3();
       const inverseRotation = new THREE.Quaternion();
       const animate = () => {
-        controls.update();
+        if(!current.brush?.active)controls.update();
         marker.quaternion.copy(camera.quaternion);
         if (marker.visible) {
           // Project the oriented ellipsoid into the camera plane, including
@@ -533,6 +609,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       return () => {
         cancelAnimationFrame(frame);
         observer.disconnect();
+        current.brush?.dispose();
         current.rows.dispose();
         controls.dispose();
         renderer.domElement.removeEventListener("pointerdown", pointerDown);
@@ -553,10 +630,14 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
     useEffect(() => {
       const current = runtime.current;
       if (!current) return;
+      current.brush?.cancelStroke();
+      current.previewColors.clear();
+      current.stitchInstances.clear();current.bobbleInstances.clear();current.fabricVertices.clear();
       disposeGroup(current.group);
       current.group.clear();
       current.nodes = null;
       current.bobbles = null;
+      current.fabric = null;
       current.bobblePoints = [];
       current.activePoints = [];
       current.marker.visible = false;
@@ -568,15 +649,28 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       );
       const pointMap = new Map(active.map((point) => [point.id, point]));
       current.activePoints = active;
+      active.forEach((point,index)=>current.stitchInstances.set(point.id,index));
       const nodeRadius = (mode === "structure" ? 0.062 : 0.25) * thickness;
-      const sphere = new THREE.SphereGeometry(
+      const sphere = mode === "stitches" ? createYarnGeometry(nodeRadius) : new THREE.SphereGeometry(
         nodeRadius,
         mode === "structure" ? 8 : 16,
         mode === "structure" ? 6 : 12,
       );
+      if (mode === "stitches") {
+        const fabric = new THREE.Mesh(
+          createFabricGeometry(model, visibleRounds, 0.15),
+          new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: THREE.DoubleSide }),
+        );
+        current.group.add(fabric);
+        current.fabric = fabric;
+        const ownership=fabric.geometry.getAttribute('stitchId');
+        for(let vertex=0;vertex<ownership.count;vertex++){
+          const id=ownership.getX(vertex),vertices=current.fabricVertices.get(id)??[];vertices.push(vertex);current.fabricVertices.set(id,vertices);
+        }
+      }
       const nodeMaterial = new THREE.MeshStandardMaterial({
-        roughness: 0.57,
-        metalness: 0.025,
+        roughness: 0.94,
+        metalness: 0,
       });
       const nodes = new THREE.InstancedMesh(
         sphere,
@@ -623,6 +717,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
           bobbles.computeBoundingSphere();
           current.bobbles = bobbles;
           current.bobblePoints = bobblePoints;
+          bobblePoints.forEach((point,index)=>current.bobbleInstances.set(point.id,index));
           current.group.add(bobbles);
         }
       }
@@ -654,7 +749,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         `Interactive crochet model. ${active.filter((p) => p.type === "bobble").length} bobble stitches, ${active.filter((p) => p.branch).length} branch stitches, ${visibleEyes.length} safety eyes. Drag to rotate, scroll to zoom, or click a stitch to inspect it.`,
       );
 
-      const links = model.links.filter(
+      const links = (mode === "structure" ? model.links : []).filter(
         (link) => pointMap.has(link.from) && pointMap.has(link.to),
       );
       const edgeRadius = (mode === "structure" ? 0.018 : 0.045) * thickness;
@@ -714,7 +809,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       );
       if (shadow) current.group.add(shadow);
 
-      if (lastModel.current !== baseModel) {
+      if (!lastModel.current || lastModel.current.points.length !== baseModel?.points.length) {
         current.reset();
         lastModel.current = baseModel;
       }
@@ -737,6 +832,15 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       const point = current.activePoints.find(
         (candidate) => candidate.id === selectedStitch,
       );
+      const selectedIds = new Set(selectedStitches);
+      const shade = new THREE.Color();
+      const tint = new THREE.Color("#b97bd7");
+      current.activePoints.forEach((p,i) => {
+        shade.set(current.previewColors.get(p.id)??p.color);
+        if (selectedIds.has(p.id)) shade.lerp(tint, 0.45);
+        current.nodes?.setColorAt(i, shade);
+      });
+      if (current.nodes?.instanceColor) current.nodes.instanceColor.needsUpdate = true;
       current.marker.visible = Boolean(point);
       if (point) {
         current.marker.position.copy(frames.get(point.id)!.position);
@@ -745,7 +849,15 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
           .fromArray(getStitchAppearance(point.type).scale)
           .multiplyScalar(thickness * (mode === "structure" ? 0.35 : 1));
       }
-    }, [selectedStitch, visibleRounds, thickness, mode, model, frames]);
+    }, [selectedStitch, selectedStitches, visibleRounds, thickness, mode, model, frames]);
+
+    useEffect(()=>{
+      const current=runtime.current;if(!current)return;
+      current.brush?.cancelStroke();
+      current.controls.mouseButtons.RIGHT=paintTool==='inspect'?THREE.MOUSE.PAN:THREE.MOUSE.ROTATE;
+      current.renderer.domElement.style.cursor=paintTool==='inspect'?'grab':'crosshair';
+      setHover(null);
+    },[paintTool,brushColor,canPaint]);
 
     return (
       <div className="model-viewer" ref={host}>
@@ -775,7 +887,9 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
               {getStitchAppearance(hover.type).label} ·{" "}
               {getStitchAppearance(hover.type).abbreviation}
             </span>
-            <span className="stitch-tooltip-action">Click to inspect</span>
+            <span className="tooltip-yarn"><i style={{background:hover.color}}/>{hover.color.toUpperCase()}{hover.paintSourceLine ? ' · Painted' : ''}</span>
+            {hover.patternColor&&<><span className="tooltip-yarn"><i style={{background:hover.patternColor}}/>Pattern: {hover.patternColor.toUpperCase()}</span><span className="stitch-tooltip-action">Paint on line {hover.paintSourceLine} overrides the written yarn.</span></>}
+            <span className="stitch-tooltip-action">{paintTool==='sample'?'Click to sample exact yarn':paintTool==='brush'?'Drag to paint · Alt-click to sample':'Click to inspect · Alt-click to sample'}</span>
           </div>
         )}
       </div>

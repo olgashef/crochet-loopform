@@ -4,9 +4,63 @@ import { buildGeometry } from "./geometry";
 import { parsePattern } from "./pattern";
 import { offsetRows } from "./rowOffsets";
 import { buildSafetyEyes, parseEyeDirective, validateEyePair } from "./safetyEyes";
+import { saveSafetyEyeTemplate } from './safetyEyeTemplate';
 
 const source = "1: 6 sc in mr\n2: 6 inc\n3: [sc, inc] × 6\n4: [sc, inc, sc] × 6\n5: 24 sc\n6: 24 sc";
 const pair = parseEyeDirective("eyes between 5 and 6 at 10, 14 size 0.8", 9)!;
+
+test('millimeter eye sizes retain physical measurements and scale with stitch width',()=>{
+  const physical=parseEyeDirective('eyes between 5 and 6 at 10, 14 size 8mm stitch 5mm',9)!;
+  assert.equal(physical.sizeMm,8);
+  assert.equal(physical.stitchWidthMm,5);
+  assert.equal(physical.size,1.44);
+  assert.deepEqual(parseEyeDirective('eyes between 5 and 6 at 10, 14 size 8 mm',9),physical);
+  const fine=parseEyeDirective('eyes between 5 and 6 at 10, 14 size 8mm stitch 2.5mm',9)!;
+  assert.equal(fine.size,physical.size*2);
+  const model=buildGeometry(parsePattern(source));
+  const eyes=buildSafetyEyes(model,[fine]);
+  assert.equal(eyes.length,2);
+  assert.equal(eyes[0].size,2.88);
+  for(const dimensions of ['0mm','41mm','8mm stitch 0mm','8mm stitch 21mm','0.8 stitch 5mm','8cm'])assert.throws(()=>parseEyeDirective(`eyes between 5 and 6 at 10, 14 size ${dimensions}`,1));
+  assert.equal(buildSafetyEyes(model,[{...physical,size:NaN}]).length,0);
+});
+
+test('the safety-eye template adds one portable instruction without altering stitches or paint',()=>{
+  const painted=source+'\npaint 5: 1=#abcdef';
+  const next=saveSafetyEyeTemplate(painted,{lowerRound:5,stitches:[10,14],sizeMm:8,stitchWidthMm:5});
+  assert.ok(next.startsWith(painted));
+  assert.ok(next.endsWith('eyes between 5 and 6 at 10, 14 size 8mm stitch 5mm'));
+  const parsed=parsePattern(next);
+  assert.deepEqual(parsed.diagnostics,[]);
+  assert.deepEqual(parsed.stitches,parsePattern(painted).stitches);
+  assert.equal(parsed.eyes[0].sizeMm,8);
+  assert.equal(buildSafetyEyes(buildGeometry(parsed),parsed.eyes).length,2);
+  assert.equal(parsePattern(JSON.parse(JSON.stringify({source:next})).source).eyes[0].sizeMm,8);
+});
+
+test('editing an eye pair preserves its comment and rejects stale placement edits',()=>{
+  const old=source+'\neyes between 5 and 6 at 10, 14 size 0.8 // face';
+  const draft={lowerRound:4,stitches:[9,13] as [number,number],sizeMm:10,stitchWidthMm:5};
+  const editing={line:7,text:old.split('\n')[6]};
+  const next=saveSafetyEyeTemplate(old,draft,editing);
+  const parsed=parsePattern(next);
+  assert.equal(parsed.eyes.length,1);
+  assert.equal(parsed.eyes[0].lowerRound,4);
+  assert.equal(parsed.eyes[0].sizeMm,10);
+  assert.ok(next.endsWith('// face'));
+  assert.throws(()=>saveSafetyEyeTemplate(old.replace('size 0.8','size 1'),draft,editing),/changed/);
+});
+
+test('template validation prevents invalid gaps, absent rounds and excess pairs before source changes',()=>{
+  const draft={lowerRound:5,stitches:[10,14] as [number,number],sizeMm:8,stitchWidthMm:5};
+  assert.throws(()=>saveSafetyEyeTemplate(source,{...draft,stitches:[10,10]}),/different/);
+  assert.throws(()=>saveSafetyEyeTemplate(source,{...draft,stitches:[10,25]}),/between 1 and 24/);
+  assert.throws(()=>saveSafetyEyeTemplate(source,{...draft,lowerRound:6}),/completed rounds/);
+  assert.throws(()=>saveSafetyEyeTemplate(source,{...draft,sizeMm:NaN}));
+  assert.throws(()=>saveSafetyEyeTemplate(source+'\nRound 7: invalid',draft),/pattern errors/);
+  const full=source+'\n'+Array(16).fill('eyes between 5 and 6 at 10, 14 size 8mm').join('\n');
+  assert.throws(()=>saveSafetyEyeTemplate(full,draft),/at most 16/);
+});
 
 test("safety-eye directives accept explicit positions and optional sizes with clear validation", () => {
   assert.deepEqual(pair, { lowerRound: 5, upperRound: 6, stitches: [10, 14], size: 0.8, line: 9 });

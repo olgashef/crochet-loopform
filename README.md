@@ -1,151 +1,106 @@
-# Loopform — crochet patterns in 3D
+# Loopform Studio
 
-A local browser workspace for writing crochet patterns and inspecting their stitch connections in an interactive 3D preview. The initial example reproduces the red-and-beige pattern from the Yarnify screenshot shared during research.
+A local crochet pattern workspace with a live, individually editable stitch model. Built with React, TypeScript, CodeMirror, and Three.js.
 
-## Run locally
-
-Use Node.js **22.12 or newer**; Node.js 24 is supported. From this checkout:
+## Run
 
 ```sh
-npm ci
+npm install
 npm run dev
 ```
 
-Open **http://localhost:5173**. The development server binds to `0.0.0.0`; port 5173 must be free, or choose another with `npm run dev -- --port 5174`. A browser with WebGL support is needed for the 3D view. No backend service, account or API key is required. In a cloud workspace with a read-only home directory, install with `npm ci --cache /tmp/loopform-npm-cache`.
+Open the localhost URL printed by Vite. `npm run build` creates the production bundle; `npm test` runs the parser, geometry, colorwork, assembly, persistence, and worksheet tests.
 
-```sh
-npm test        # Parser, attachment topology and geometry checks
-npm run build  # TypeScript check and production build in dist/
-npm run preview
-```
+## Design a pattern
 
-`npm run preview` serves the production build on Vite's preview port, normally 4173.
-
-## Workspace
-
-- Write in the **Worksheet**: round labels, instructions, and automatically calculated totals match a printed crochet pattern. Counts are read-only; no typing or updating totals is needed. **Code** switches to the full syntax-highlighted text editor without converting or losing pattern information.
-- In the worksheet, **Enter** moves to the next round (or adds one), **Shift+Enter** inserts a round below, and Backspace removes an empty row. Paste tab-separated rows directly from a spreadsheet. Round labels renumber automatically when you insert/delete a row or change a grouped duration.
-- Use `[sc, inc] × 7`, `7 sc in mr`, and `49 sc for 8 rounds`. A hold is shown as a range such as **Rnd 9–16**, with the stitch total **per round**. Independent totals remain visible if an earlier row has an error, and the last valid model stays available.
-- Write patterns in either editor. Auto-render updates valid changes after a short pause; turn it off to render manually. Use **Ctrl+Enter / Cmd+Enter** to render at any time.
-- Inspect count and attachment errors by source line. An invalid edit preserves the last valid preview.
-- Orbit, pan and zoom the 3D model. Click a stitch to inspect its round, position, type, source line and parent connections.
-- Switch between **Stitches** and **Structure**, adjust display stitch size, reset the camera or use fullscreen.
-- Scrub through rounds, step forward/back or play the construction sequence.
-- Enable **Move rows** (↕), grab a row line or the green vertical handle, and drag up/down. **Front view** provides a straight-on view. Use ↑/↓ to nudge (Shift for larger steps), Escape to cancel a drag, or Undo/Reset to restore positions. The numeric offset and Up/Down buttons provide another way to move a row.
-- Row adjustments change the preview geometry without rewriting stitch counts. They are saved locally and included in Loopform project JSON and rendered PNGs. Plain pattern text contains only crochet instructions. Rendering changed pattern text or loading another example starts with the new pattern’s shape.
-- Recognize stitch types by shape: round **SC** bubbles, elongated **HDC** beads, longer **DC** beads, the tallest **TR** beads and protruding, lobed **BBL** bobbles. Beads align with their parent connections to follow the fabric's slope; two-parent stitches use the parents' midpoint. Tall stitch bodies extend down from their upper row anchor along the connection and are bounded by the space between rows. Chains and slip stitches are flattened; decreases are wide beads. The shape key shows the types in the visible rounds while yarn colors retain their pattern meaning.
-- Use **Safety eyes** to place an eye pair between adjacent rounds, choose the stitch gaps and adjust its preview diameter. Eye placements are stored as pattern instructions and follow row adjustments and round playback.
-- Load the **Mushroom cap**, **Little sphere**, **Everyday basket**, **Stitch sampler**, **Seven-stitch shaping**, **Two-color basket** or **Orange critter** examples. The sampler compares stitch shapes; the two-color basket demonstrates mid-round color changes. The orange critter includes bobble ears, safety eyes, a white belly and a chain tail.
-- Import `.crochet` / `.txt` patterns or version-1 Loopform `.json` projects. Export pattern text, an editable project or a PNG of the current model view.
-- Choose **Export → Pattern CSV** for a spreadsheet with round labels, instructions, calculated stitch totals per round, yarn colors and notes. Grouped rounds remain grouped; unfinished instructions have a blank total. CSV export uses the current editor contents.
-- Pattern text, row adjustments and display thickness are saved in this browser's local storage when available. Export a file to keep a portable copy; browser storage is not a backup.
-
-## Pattern format
-
-For patterns worked from the head downward, choose **First round → At top** below the preview, or add `orientation top-down` on its own line. The Orange critter example uses this orientation. Older saved patterns without a directive also open head-up when all safety eyes are in the first half of the rounds. Otherwise, rounds build upward by default. An explicit `orientation bottom-up` or `orientation top-down` always overrides that automatic choice. Orientation preserves stitch numbering, eyes, branches and row adjustments and is saved in pattern/project exports and browser storage.
-
-Use US crochet abbreviations and one numbered round per line. Round numbers must start at 1 and remain consecutive.
+The three-panel workspace includes a searchable stitch library, a pattern editor (or editable rounds worksheet), and a 3D preview. Click library entries to insert notation at the code cursor. Add round continues the previous count. Validation identifies invalid counts and references; the preview retains the valid prefix of a pattern.
 
 ```text
-# A little shape
-[red]
-1: 8 sc in mc (8)
-2: 8 inc (16)
-3: [1 sc, 1 inc] rep 8 times (24)
-4: [5 sc, 1 inc] rep 4 times (28)
-5: 3 sc, 1 inc, [6 sc, 1 inc] rep 3 times, 3 sc (32)
-
-// Change yarn color
-[beige]
-6: [6 hdc, 1 dec] rep 4 times (28)
-7: [5 sc, 1 dec] rep 4 times (24)
+Pattern name: "My first piece"
+start: magic ring
+Round 1 [#f3e8d6]: 6 sc in ring → 6
+Round 2: inc x6 → 12
+Round 3: (sc, inc) x6 → 18
+Round 4-6: sc around → 18
+Round 7: (sc, dec) x6 → 12
+Round 8: dec x6 → 6
+fasten off
 ```
 
-| Syntax                  | Meaning                                                           |
-| ----------------------- | ----------------------------------------------------------------- |
-| `sc`, `hdc`, `dc`, `tr` | Single, half-double, double and treble crochet                    |
-| `inc`                   | Two single-crochet outputs attached to one parent stitch          |
-| `dec`                   | One output joining two parent stitches                            |
-| `ch`, `slst`            | Chain and slip-stitch primitives in the simplified graph          |
-| `bobble`, `bbl`         | One 3-DC bobble: consumes one parent and produces one stitch      |
-| `[bobble, sc] in same st` | Work both outputs into one parent stitch                       |
-| `branch(12 ch, 11 slst)` | Chain out from the body and slip-stitch back; excluded from body totals |
-| `branch(12 ch)`         | An open chain extending from its body attachment                 |
-| `6 sc`                  | Six stitches; an omitted count means one                          |
-| `[sc, inc] rep 6 times` | Repeat a group; nested groups are supported                       |
-| `in mc`                 | Magic-ring foundation in round 1; `mr` and `magic ring` also work |
-| `(24)`                  | Optional expected output count, checked against the instructions  |
-| `[beige]`, `[#a9c6b5]`  | Named yarn color or three-/six-digit hex color                    |
-| `// comment`            | Comment, including after instructions                             |
-| `# My pattern`          | Comment; the first nonempty `#` line supplies the pattern title   |
+Both `Round 3: (sc, inc) x6 → 18` and the older `Rnd 3: [sc, inc] rep 6 times (18)` work. Supports sc, hdc, dc, tr, ch, slst/ss, inc, dec, bobble/bbl, nested repeats, round ranges, same-stitch groups, chain branches, and safety eyes. Named color directives such as `[cream]` set the working yarn. Round-header colors and immediate suffixes such as `2 sc[#ff8800]` and `inc[,#ffffff]` are supported; suffix colors apply to their stitch operation without changing the following yarn.
 
-Printed notation such as `Rnd 1 7 sc in mr`, `Rnd 3: [sc, inc] × 7` and `Rnd 9–16: 49 sc for 8 rounds` is supported. Explicit ranges must agree with any `for N rounds` suffix. Written-pattern exports include freshly calculated `(total)` values.
+`orientation top-down` places the first round at the crown. `orientation bottom-up` places it at the bottom. Choose **Safety eyes** under **Accessories** in the stitch library. Select two adjacent rounds, the gap after each eye’s stitch, and the diameter in millimeters, then confirm. The code updates in one undoable edit and the 3D view turns toward the new eyes. Cancel leaves the pattern unchanged. You can edit or remove pairs under **Piece settings & accessories → Safety eyes**.
 
-Aliases include `ss`, `chain`, `increase`, `decrease`, and `R1:` / `Round 1:` round labels. Repeats also accept `repeat`, `x` or `*` instead of `rep`.
+The generated instruction is `eyes between 8 and 9 at 15, 22 size 8mm stitch 5mm`. Rounds and stitch positions start at one. Eye diameter supports 1–40 mm. **Preview scale** lets you set an approximate stitch width (1–20 mm; default 5 mm) for sizing relative to your yarn. Both measurements are saved in the pattern. Older unitless eye sizes, such as `size 0.8`, still render at their original relative size; editing them in the dialog converts them to millimeters using the default stitch width.
 
-Change yarn **within a round** by placing a color marker before the stitches that use it. This works in both Worksheet and Code:
+## Colorwork
+
+Choose **Color → Brush**, choose a yarn, then drag over the 3D model or stitch chart. Each touched stitch is colored in full; the cursor path is sampled between pointer events so fast strokes stay continuous. The preview updates while dragging and commits once on release, making each stroke one undo step. Escape, losing pointer capture, or leaving the window cancels an unfinished stroke. Right-drag rotates the model in brush mode; Explore restores normal navigation.
+
+Use **Eyedropper** (or Alt-click a stitch) to copy its exact stored yarn value, then continue brushing. Sampling never reads shaded screen pixels or changes the sampled stitch. **In this piece** swatches reuse exact existing shades; the **Active yarn** hex field accepts six-digit or shorthand hex values. Hovering a stitch also shows its yarn code.
+
+**Select** retains selection-based colorwork. Choose a scope, select stitches, choose a yarn, and click Apply yarn. Selection scopes:
+
+- Stitch: one output stitch, including one child of an increase.
+- Multi: toggle individual stitches into a selection.
+- Patch: the connected region of the same yarn, following course and parent links.
+- Round: every body stitch in the clicked round.
+- Whole piece: all stitches, including external chain branches.
+
+Choose a color under “In this piece”, then **Select matching** to select every use of that exact shade. Choose a replacement and click **Apply yarn**. Undo and redo cover color, source, and project edits. Selection is highlighted on the 3D model and chart.
+
+Painting preserves the original construction instructions and adds portable, editable directives:
 
 ```text
-Rnd 1: [red] 4 sc, [beige] 4 sc in mr (8)
-Rnd 2: [[red] sc, [beige] sc] × 4 (8)
-Rnd 3: 8 sc (8)
+paint 4: 1=#ff8800, 2=#ff8800
 ```
 
-Markers consume no stitches. The active color continues until the next marker, including across repeat groups and round boundaries; round 3 above is all beige. An increase makes both of its stitches in the active color. Standalone color lines still work. Written text, project JSON and CSV exports preserve inline markers; the CSV Yarn column lists the colors used in each row, separated by semicolons. These markers describe stitch colors, not yarn-carrying or finishing techniques.
+The first number is the round, followed by one-based body stitch numbers. External branch stitches use `paint stitch 24: #ff8800`, where 24 is the one-based construction ID. Invalid paint references are reported, never silently remapped.
 
-### Bobbles and shared attachment stitches
+## Preview
 
-A `bobble` is one completed stitch made from a 3-DC cluster, drawn as a lobed bump projecting out of the fabric. Use `bobble` or `bbl`, rather than `3 dc`, which makes three separate double crochet stitches. To work a bobble and a single crochet into the same parent, write `[bobble, sc] in same st`; this consumes one parent and contributes two outputs to the round total. Reverse the order with `[sc, bobble] in same st` when the pattern calls for it.
+Finished fabric combines an instanced continuous yarn loop with subtle helical ply ridges and a color-matched fabric backing. The backing prevents see-through gaps and blocks accidental picking of stitches on the far side. Closed amigurumi profiles have relaxed shoulders, and the foundation loops lie on the crown surface. The separate structure view exposes the construction graph.
 
-### Safety eyes
+Orbit, zoom, recenter, switch front view, choose a light/dark backdrop, or expand the preview. Use playback to build the piece round by round. Move individual rounds with the height handle or a numeric offset. Yarn size changes the visual yarn thickness without changing the pattern counts.
 
-Eye placement can also be written on its own line in either editor:
+This is a geometric approximation, not a yarn/tension/stuffing physics simulation. It does not promise an exact real-world finished shape. Openwork, flat turning rows, complex freeform construction, sewing deformation, and embroidery are not simulated. Assembly positions pieces without physically sewing or deforming their fabric.
 
-```text
-eyes between 5 and 6 at 10, 14 size 0.8
-```
+## Assemble multiple pieces
 
-This places two eyes between rounds 5 and 6, in the gaps **after stitches 10 and 14 of round 5**. Four stitches, numbered 11–14, lie between those gaps. Positions are one-based and must be distinct, and both adjacent rounds must exist. `size` is the eye diameter in relative preview units, not millimeters; it is optional, defaults to `0.7` and accepts values from `0.15` to `2`. Up to 16 pairs are supported. Adjust the positions to match the intended face direction rather than assuming that a round's first stitch faces the camera.
+Switch from **Piece** to **Assembly** to view the whole project. The first tab is the main piece. Every other piece retains its own editable pattern, stitch colors, accessories, and row offsets.
 
-Eyes sit outside the fabric, appear once the upper round is visible and move with the surrounding rows. Their directives survive pattern-text, project JSON and CSV export; the current appearance is included in PNG export.
+1. Use **Add ear**, the **+** piece tab, or duplicate a piece. New pieces appear beside the main piece.
+2. Select **Place on main piece**, then click the stitch where the piece should join. Rotate the view to reach the back. The joining edge (first or last round) snaps to that stitch and the piece points outward.
+3. Use **Move** arrows/planes and **Rotate** rings, or enter XYZ position/offset, rotation in degrees, and size below the preview. Attached offsets are relative to the attachment stitch, in the main piece's coordinates.
+4. Duplicate for a matching ear, then choose its new placement. **Detach** preserves the world pose. The visibility button hides a piece in Assembly; hiding the main piece also hides its attachments.
 
-### Chains extending from the body
+Attachments follow their stitch as the main pattern or row heights change, and move/rotate/scale with the main piece. If a pattern edit removes an attachment stitch, the previous anchor position remains available and a warning asks you to place it again. The first tab remains the assembly base and cannot be removed. Undo/redo includes attachments and treats each handle drag as one edit.
 
-Use a `branch(...)` instruction for a chain that leaves the body instead of becoming part of its next circular round. For the instruction “CH12, start in second stitch from hook and SL ST 11 stitches down, then 24SC,” write:
+Assembly uses the same stitch geometry, fabric backing, yarn colors, and safety eyes as the individual preview. It caches piece geometry during placement so dragging only updates transforms. Project JSON preserves the full assembly; PNG export captures it without editing handles. Pattern TXT contains piece instructions, while placement is stored in project JSON.
 
-```text
-Rnd 27: branch(12 ch, 11 slst), 24 sc (24)
-```
+## Projects & files
 
-The preview makes 12 outward chain stitches and 11 slip stitches returning along them, skipping the chain nearest the hook. The branch attaches to the preceding body stitch; at the start of a round, that is the last body stitch of the previous round. Put the branch later in the round to choose another attachment, for example `6 sc, branch(12 ch, 11 slst), 18 sc`. A returning branch requires exactly one fewer slip stitch than chains. Use `branch(12 ch)` for an open chain, or several branch instructions for multiple appendages.
+Projects have up to 30 independent pieces. Add, rename, duplicate, and remove them in the piece controls. Duplicating preserves colors, accessories, row offsets, and attachment settings. All edits autosave locally. Open tabs synchronize project edits while keeping their own selected piece; receiving another tab’s edit clears outdated undo history. Legacy `loopform.workspace.v1` data migrates into the new workspace without deleting the old save.
 
-Branch stitches are visible and selectable, but do not consume body stitches or enter the round's `(24)` total. The next round still works into the 24 body stitches. They do count toward the overall 8,000-stitch limit. Written text, CSV instructions and project JSON retain branch instructions, and PNG export includes their rendered shape. Free-form English such as “start in second ST from hook” must be translated into this syntax before pasting it into the app.
+- Save project downloads all pieces, offsets, and assembly placements as `.loopform.json`.
+- Export offers project JSON, all-piece pattern text, and a PNG of the current 3D view.
+- Open accepts project JSON, older single-source JSON, and `.txt` / `.crochet` patterns.
 
-Each later round must consume exactly the previous round's available stitches. An ordinary stitch consumes one parent, an increase consumes one and produces two, a decrease consumes two and produces one, and a chain creates an output without consuming a parent. These explicit rules make the preview predictable; they do not cover every real crochet construction. To keep interactive work bounded, patterns are limited to 8,000 stitch outputs, 150 rounds, 120,000 characters and 12 nested repeat levels.
+Use project JSON for a complete round trip. All-piece TXT is a readable document with piece separators; import separate pieces individually. There is no account, server persistence, public gallery, or automatic upload. Keep downloaded project backups: browser storage may be cleared or unavailable.
 
-## Modeling scope
+## Implementation
 
-This version targets **continuous-round crochet**, with bobbles, safety-eye placement and attached chain branches. It preserves individual stitch IDs, construction order and parent attachments. A deterministic circular-profile approximation derives radii from body-round counts and estimates vertical rise from available stitch height and radial travel. Attachment placement adds local angular/radial variation; taller stitch types create more height. Branches use a deterministic outward curve with slip stitches alongside the chain; this previews an appendage's attachment and construction, not its final drape or a physically shaped horn.
+- `src/lib/pattern.ts`: bounded parser and construction graph; never evaluates input.
+- `src/lib/geometry.ts`: stitch placement and closed-form profile relaxation.
+- `src/lib/yarnGeometry.ts`: shared plied-yarn geometry.
+- `src/lib/fabricGeometry.ts`: colored inset backing for finished fabric.
+- `src/lib/colorwork.ts`: connected selection, exact hex normalization, and lossless paint directives.
+- `src/lib/stitchBrush.ts`: shared pointer capture, continuous strokes, sampling, and cancellation for 3D and chart views.
+- `src/lib/studio.ts`: project validation, persistence, and starter patterns.
+- `src/lib/assembly.ts`: stitch anchors, joining pivots, transforms, and attachment validation.
+- `src/components/AssemblyViewer.tsx`: multiple-piece scene, surface picking, and transform handles.
+- `src/lib/pieceMesh.ts`: colored yarn and accessory meshes for assembly.
 
-The preview is **not a calibrated yarn, tension, stuffing or contact simulation**. Shaped beads and straight connectors show the construction graph, not the complete over-and-under yarn path. Bead proportions are visual stitch symbols. “Stitch size” changes display thickness, not pattern counts, physical dimensions or gauge.
+The interaction model was researched from Crochet3D’s public guide and signed-in planner. Loopform uses its own local implementation and assets.
 
-Flat rows, turns, BLO/FLO, separate-component sewing, specialized hdc decreases and arbitrary mesh-to-pattern conversion are not implemented. A note such as `// BLO` remains a comment and does not change topology. Physical sample comparison is still needed before treating a preview as a size or shape prediction.
-
-## Source map
-
-- `src/lib/pattern.ts`: safe pattern tokenizer/parser, repeat expansion, count validation, attachment graph and examples.
-- `src/lib/geometry.ts`: original deterministic profile-layout approximation and graph links.
-- `src/components/PatternEditor.tsx`: CodeMirror editor and source-line selection.
-- `src/components/PatternWorksheet.tsx` and `src/lib/worksheet.ts`: worksheet authoring, automatic totals, round ranges, spreadsheet paste and written export.
-- `src/components/ModelViewer.tsx`: Three.js rendering, camera controls, picking and PNG capture.
-- `src/lib/stitchAppearance.ts` and `src/components/StitchLegend.tsx`: shared stitch-shape definitions and the visible-round shape key.
-- `src/lib/stitchFrame.ts`: parent-aligned bead rotations and rotated bounds.
-- `src/lib/bobbleGeometry.ts`: lobed bobble stitch geometry.
-- `src/lib/safetyEyes.ts`: eye directives, placement validation and surface positions.
-- `src/App.tsx`: workspace, rendering controls, playback, import/export and local persistence.
-- `src/components/RowManipulator.ts` and `src/lib/rowOffsets.ts`: vertical row dragging, selection, and shape offsets.
-- `src/styles.css`: workspace layout and styling.
-- `src/lib/*.test.ts`: parser and geometry regression checks.
-- `docs/research/`: source-linked research and screenshot analysis that informed the prototype.
-
-The application implementation is original to this repository. The research documents reference external projects; their implementation code has not been vendored into the app.
+Brush edits take precedence over the colors written in rounds. The editor shows a **Painted colors active** notice, and painted stitch tooltips show both the effective and written yarn colors. **Manage painted colors → Restore pattern colors** removes brush overrides for one round or the whole piece; Undo restores them. Existing projects keep their paint until this action is used.
