@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildGeometry } from "./geometry";
+import { buildGeometry, type Position } from "./geometry";
 import { parsePattern } from "./pattern";
 import { offsetRows } from "./rowOffsets";
 import { buildSafetyEyes, parseEyeDirective, validateEyePair } from "./safetyEyes";
@@ -8,6 +8,39 @@ import { saveSafetyEyeTemplate } from './safetyEyeTemplate';
 
 const source = "1: 6 sc in mr\n2: 6 inc\n3: [sc, inc] × 6\n4: [sc, inc, sc] × 6\n5: 24 sc\n6: 24 sc";
 const pair = parseEyeDirective("eyes between 5 and 6 at 10, 14 size 0.8", 9)!;
+
+// Remove the eye's seating offset to inspect its actual fabric attachment.
+const anchor = (eye: ReturnType<typeof buildSafetyEyes>[number]) =>
+  eye.position.map((value, i) => value - eye.normal[i] * (0.24 + eye.size * 0.18));
+
+test('eyes follow expanding and closing surfaces in both orientations, including the first-round seam', () => {
+  const base = buildGeometry(parsePattern('1: 6 sc in mr\n2: 6 inc'));
+  const firstPair = { ...pair, lowerRound: 1, upperRound: 2, stitches: [2, 6] as [number, number] };
+  for (const direction of [-1, 1]) for (const radii of [[1, 2], [2, 1], [2, 2]]) {
+    const dy = direction * 0.6;
+    const model = {
+      ...base,
+      points: base.points.map(point => {
+        const theta = point.index * 2 * Math.PI / (point.round === 1 ? 6 : 12);
+        return { ...point, position: [Math.cos(theta) * radii[point.round - 1], (point.round - 1) * dy, Math.sin(theta) * radii[point.round - 1]] as Position };
+      }),
+      roundCenters: base.roundCenters.map(round => ({ ...round, center: [0, (round.round - 1) * dy, 0] as Position })),
+    };
+    const eyes = buildSafetyEyes(model, [firstPair]);
+    assert.equal(eyes.length, 2);
+    for (const eye of eyes) {
+      const theta = (eye.stitch - 0.5) * 2 * Math.PI / 6;
+      const slope = -(radii[1] - radii[0]) / dy;
+      const length = Math.hypot(1, slope);
+      const expected = [Math.cos(theta) / length, slope / length, Math.sin(theta) / length];
+      expected.forEach((value, i) => assert.ok(Math.abs(eye.normal[i] - value) < 1e-10));
+      const surface = anchor(eye);
+      assert.ok(Math.abs(surface[1] - dy / 2) < 1e-10);
+      assert.ok(Math.abs(Math.hypot(surface[0], surface[2]) - (radii[0] + radii[1]) / 2) < 1e-10);
+      assert.ok(Math.abs(Math.hypot(...eye.normal) - 1) < 1e-10);
+    }
+  }
+});
 
 test('millimeter eye sizes retain physical measurements and scale with stitch width',()=>{
   const physical=parseEyeDirective('eyes between 5 and 6 at 10, 14 size 8mm stitch 5mm',9)!;
@@ -104,9 +137,10 @@ test("eye placement follows row offsets and translation of asymmetric model boun
   const original = buildSafetyEyes(model, [pair]);
   const moved = buildSafetyEyes(offsetRows(model, { 5: 2, 6: 4 }), [pair]);
   for (let i = 0; i < original.length; i++) {
-    assert.ok(Math.abs(moved[i].position[1] - original[i].position[1] - 3) < 1e-10);
-    assert.equal(moved[i].position[0], original[i].position[0]);
-    assert.equal(moved[i].position[2], original[i].position[2]);
+    const before = anchor(original[i]), after = anchor(moved[i]);
+    assert.ok(Math.abs(after[1] - before[1] - 3) < 1e-10);
+    assert.ok(Math.abs(after[0] - before[0]) < 1e-10);
+    assert.ok(Math.abs(after[2] - before[2]) < 1e-10);
   }
   const shifted = {
     ...model,
@@ -134,11 +168,14 @@ test("eyes remain on the outside at the round seam and between decreasing rounds
   const seamRight = model.points.find((p) => p.round === 5 && p.index === 0)!;
   const direction = (p: typeof seamLeft) => Math.atan2(p.position[2] - lower.center[2], p.position[0] - lower.center[0]);
   const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
-  const eyeAngle = Math.atan2(eyes[0].normal[2], eyes[0].normal[0]);
+  const seamAnchor = anchor(eyes[0]);
+  const eyeAngle = Math.atan2(seamAnchor[2] - lower.center[2], seamAnchor[0] - lower.center[0]);
   assert.ok(Math.abs(wrap(eyeAngle - direction(seamLeft)) - wrap(direction(seamRight) - direction(seamLeft)) / 2) < 1e-10);
   for (const eye of eyes) {
     const radial = Math.hypot(eye.position[0] - lower.center[0], eye.position[2] - lower.center[2]);
-    assert.ok(radial > (lower.radius + upper.radius) / 2 + 0.1);
-    assert.ok(eye.position[1] > lower.center[1] && eye.position[1] < upper.center[1]);
+    const surface = anchor(eye);
+    assert.ok(radial > Math.hypot(surface[0] - lower.center[0], surface[2] - lower.center[2]));
+    assert.ok(surface[1] > lower.center[1] && surface[1] < upper.center[1]);
+    assert.ok(eye.normal[1] > 0, 'closing rounds tilt eyes toward the cap');
   }
 });

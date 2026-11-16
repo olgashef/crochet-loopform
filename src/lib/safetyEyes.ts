@@ -1,4 +1,5 @@
 import type { ModelGeometry, ModelPoint, Position } from "./geometry";
+import { Vector3 } from 'three';
 import type { PatternRound } from "./pattern";
 import { DEFAULT_STITCH_WIDTH_MM, PREVIEW_STITCH_WIDTH } from './stitchScale';
 
@@ -77,11 +78,40 @@ export function validateEyePair(pair: SafetyEyePair, rounds: PatternRound[]): st
 }
 
 const TAU = Math.PI * 2;
-const wrap = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle));
 const radius = (point: ModelPoint, center: Position) =>
   Math.hypot(point.position[0] - center[0], point.position[2] - center[2]);
 const angle = (point: ModelPoint, center: Position) =>
   Math.atan2(point.position[2] - center[2], point.position[0] - center[0]);
+
+function surfaceRing(points: ModelPoint[], center: Position) {
+  const ring = points.map(point => ({
+    theta: (angle(point, center) + TAU) % TAU,
+    radius: radius(point, center),
+    y: point.position[1],
+  })).sort((a, b) => a.theta - b.theta);
+  return (theta: number) => {
+    const wrapped = (theta % TAU + TAU) % TAU;
+    const next = ring.findIndex(point => point.theta > wrapped);
+    const index = next < 0 ? ring.length : next;
+    const left = ring[(index + ring.length - 1) % ring.length];
+    const right = ring[index % ring.length];
+    const start = left.theta - (index === 0 ? TAU : 0);
+    const end = right.theta + (index === ring.length ? TAU : 0);
+    const span = end - start || TAU;
+    const fraction = (wrapped - start) / span;
+    const r = left.radius + (right.radius - left.radius) * fraction;
+    const y = left.y + (right.y - left.y) * fraction;
+    const dr = (right.radius - left.radius) / span;
+    return {
+      position: new Vector3(center[0] + Math.cos(theta) * r, y, center[2] + Math.sin(theta) * r),
+      tangent: new Vector3(
+        Math.cos(theta) * dr - Math.sin(theta) * r,
+        (right.y - left.y) / span,
+        Math.sin(theta) * dr + Math.cos(theta) * r,
+      ),
+    };
+  };
+}
 
 /** Eye coordinates follow row moves and asymmetric model recentering. */
 export function buildSafetyEyes(
@@ -101,6 +131,8 @@ export function buildSafetyEyes(
     const lower = bodyPoints(pair.lowerRound);
     const upper = bodyPoints(pair.upperRound);
     if (!lower.length || !upper.length || validateEyeSize(pair)) continue;
+    const sampleLower = surfaceRing(lower, lowerCenter);
+    const sampleUpper = surfaceRing(upper, upperCenter);
     for (const [eyeIndex, stitch] of pair.stitches.entries()) {
       if (!Number.isSafeInteger(stitch) || stitch < 1 || stitch > lower.length) continue;
       const left = lower[stitch - 1];
@@ -108,26 +140,23 @@ export function buildSafetyEyes(
       const startAngle = angle(left, lowerCenter);
       const gap = (angle(right, lowerCenter) - startAngle + TAU) % TAU;
       const eyeAngle = startAngle + gap / 2;
-      // Use the upper course nearest this surface gap. This remains valid for
-      // increases, decreases and attachment-aware angular shifts.
-      const nearby = [...upper].sort((a, b) =>
-        Math.abs(wrap(angle(a, upperCenter) - eyeAngle)) -
-        Math.abs(wrap(angle(b, upperCenter) - eyeAngle)),
-      ).slice(0, 2);
-      const lowerRadius = (radius(left, lowerCenter) + radius(right, lowerCenter)) / 2;
-      const upperRadius = nearby.reduce((sum, point) => sum + radius(point, upperCenter), 0) / nearby.length;
-      const surfaceRadius = (lowerRadius + upperRadius) / 2;
-      const normal: Position = [Math.cos(eyeAngle), 0, Math.sin(eyeAngle)];
-      const radialDistance = surfaceRadius + 0.24 + pair.size * 0.18;
-      const upperY = nearby.reduce((sum, point) => sum + point.position[1], 0) / nearby.length;
+      // Sample both courses at the same angle, including across the seam.
+      // Their two surface tangents give the eye's outward axis even on domes,
+      // decreases, uneven stitch heights and top-down or moved courses.
+      const a = sampleLower(eyeAngle), b = sampleUpper(eyeAngle);
+      const outward = new Vector3(Math.cos(eyeAngle), 0, Math.sin(eyeAngle));
+      const normal = b.position.clone().sub(a.position).cross(a.tangent.clone().add(b.tangent));
+      if (normal.lengthSq() < 1e-18) normal.copy(outward);
+      else {
+        if (normal.dot(outward) < 0) normal.negate();
+        normal.normalize();
+      }
+      const position = a.position.clone().lerp(b.position, 0.5)
+        .addScaledVector(normal, 0.24 + pair.size * 0.18);
       placements.push({
         id: `eyes-${pair.line}-${pairIndex}-${eyeIndex}`,
-        position: [
-          (lowerCenter[0] + upperCenter[0]) / 2 + normal[0] * radialDistance,
-          ((left.position[1] + right.position[1]) / 2 + upperY) / 2,
-          (lowerCenter[2] + upperCenter[2]) / 2 + normal[2] * radialDistance,
-        ],
-        normal,
+        position: position.toArray(),
+        normal: normal.toArray(),
         size: pair.size,
         lowerRound: pair.lowerRound,
         upperRound: pair.upperRound,

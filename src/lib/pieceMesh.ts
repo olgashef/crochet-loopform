@@ -6,6 +6,7 @@ import { createFabricGeometry } from './fabricGeometry';
 import { createBobbleGeometry } from './bobbleGeometry';
 import { buildStitchFrames } from './stitchFrame';
 import { buildSafetyEyes } from './safetyEyes';
+import { createEmbroideryMesh } from './embroideryMesh';
 
 /** Shared yarn geometry per piece, retaining all stitch colors and accessories. */
 export function createPieceMesh(model: ModelGeometry, pattern: ParsedPattern, thickness: number) {
@@ -39,6 +40,7 @@ export function createPieceMesh(model: ModelGeometry, pattern: ParsedPattern, th
     glint.position.set(-.24,.28,.9);pupil.add(glint);group.add(pupil);
   }
   if(!eyes.length) eyeMaterial.dispose();
+  group.add(createEmbroideryMesh(model, pattern.embroidery, thickness));
   return group;
 }
 export function disposePieceMesh(group: THREE.Object3D) {

@@ -15,12 +15,12 @@ export function PaintedColorsNotice({ pattern, selected, onRestore }: Props) {
   const rounds = [...new Set(painted.map(stitch => stitch.round))];
   const activeScope = scope === 'all' || rounds.includes(Number(scope)) ? scope : 'all';
   return <aside className="painted-colors-notice" aria-label="Painted color overrides">
-    <strong><Paintbrush size={13}/>Painted colors active · {painted.length} stitches</strong>
-    <p>Brush colors override the written yarn colors in this piece.</p>
+    <strong><Paintbrush size={13}/>Colors saved in pattern · {painted.length} stitches</strong>
+    <p>Exact stitch colors are stored in editable paint instructions and included in pattern exports.</p>
     {selected?.patternColor && <div className="painted-color-comparison">
       <span>Round {selected.round}, stitch {selected.index + 1}</span>
-      <span><i style={{ background: selected.patternColor }}/>Pattern {selected.patternColor.toUpperCase()}</span>
-      <span><i style={{ background: selected.color }}/>Painted {selected.color.toUpperCase()}</span>
+      <span><i style={{ background: selected.patternColor }}/>Base yarn {selected.patternColor.toUpperCase()}</span>
+      <span><i style={{ background: selected.color }}/>Saved color {selected.color.toUpperCase()}</span>
     </div>}
     <details>
       <summary>Manage painted colors</summary>

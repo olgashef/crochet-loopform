@@ -64,7 +64,7 @@ const crochetLanguage = StreamLanguage.define({
       return "keyword";
     if (
       stream.match(/[×*]/) ||
-      stream.match(/(?:rep|repeat|times|in|for|rounds?|rnds?|x|same|st|branch|eyes|between|and|at|size)\b/i)
+      stream.match(/(?:rep|repeat|times|in|for|rounds?|rnds?|x|same|st|branch|eyes|between|and|at|size|embroider|embroidery|dk|bulky)\b/i)
     )
       return "operator";
     if (stream.match(/(?:mc|mr)\b/i)) return "typeName";
@@ -90,6 +90,24 @@ const crochetHighlight = HighlightStyle.define([
   { tag: tags.bracket, color: "#858b82" },
   { tag: tags.variableName, color: "#616960" },
 ]);
+
+// Exact yarn swatches remain editable text, including model-generated paint entries.
+function yarnDecorations(state: EditorState): DecorationSet {
+  const marks = [];
+  for (const match of state.doc.toString().matchAll(/#[a-fA-F0-9]{6}\b/g)) {
+    const color = match[0];
+    marks.push(Decoration.mark({
+      class: 'cm-yarn-color',
+      attributes: { style: `border-bottom: 4px solid ${color}`, title: `Yarn ${color.toUpperCase()}` },
+    }).range(match.index!, match.index! + color.length));
+  }
+  return Decoration.set(marks, true);
+}
+const yarnColorsField = StateField.define<DecorationSet>({
+  create: yarnDecorations,
+  update: (value, transaction) => transaction.docChanged ? yarnDecorations(transaction.state) : value,
+  provide: field => EditorView.decorations.from(field),
+});
 
 const externalSync = Annotation.define<boolean>();
 const setDiagnostics = StateEffect.define<Diagnostic[]>();
@@ -186,6 +204,7 @@ export function PatternEditor({
           crochetLanguage,
           syntaxHighlighting(crochetHighlight),
           diagnosticsField,
+          yarnColorsField,
           selectedLineField,
           EditorState.tabSize.of(2),
           EditorView.contentAttributes.of({

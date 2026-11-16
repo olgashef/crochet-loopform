@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import * as THREE from "three";
+import { flushSync } from 'react-dom';
 import { StitchBrush, type PaintTool } from "../lib/stitchBrush";
 import { createFabricGeometry } from "../lib/fabricGeometry";
 import { createYarnGeometry } from "../lib/yarnGeometry";
@@ -20,6 +21,10 @@ import { frameModelBounds, initialModelView } from "../lib/viewFraming";
 import "./ModelViewer.css";
 import { RowManipulator } from "./RowManipulator";
 import { offsetRows, type RowOffsets } from "../lib/rowOffsets";
+import { THREADS, type EmbroideryAnchor, type EmbroiderySegment, type ThreadWeight } from '../lib/embroidery';
+import { embroiderySurface } from '../lib/embroiderySurface';
+import { createEmbroideryMesh } from '../lib/embroideryMesh';
+import { EmbroideryPointer } from '../lib/embroideryPointer';
 
 export interface ViewerHandle {
   focusEyePair?(index:number): void;
@@ -33,6 +38,12 @@ export interface ViewerHandle {
 export interface ViewerProps {
   model: ModelGeometry | null;
   safetyEyes: SafetyEyePair[];
+  embroidery: EmbroiderySegment[];
+  embroidering: boolean;
+  embroideryAnchor: EmbroideryAnchor | null;
+  threadWeight: ThreadWeight;
+  threadColor: string;
+  onEmbroideryPoint: (anchor: EmbroideryAnchor) => void;
   rowOffsets: RowOffsets;
   moveRows: boolean;
   selectedRow: number | null;
@@ -76,6 +87,9 @@ interface ViewerRuntime {
   stitchInstances: Map<number,number>;
   bobbleInstances: Map<number,number>;
   fabricVertices: Map<number,number[]>;
+  embroidery: THREE.Group;
+  embroideryDraft: THREE.Group;
+  embroideryPointer: EmbroideryPointer | null;
 }
 
 interface HoveredPoint {
@@ -144,6 +158,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
     {
       model: baseModel,
       safetyEyes,
+      embroidery, embroidering, embroideryAnchor, threadWeight, threadColor, onEmbroideryPoint,
       visibleRounds,
       thickness,
       mode,
@@ -186,6 +201,9 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
     const host = useRef<HTMLDivElement>(null);
     const runtime = useRef<ViewerRuntime | null>(null);
     const modelRef = useRef(model);
+    const surface = useMemo(() => model ? embroiderySurface(model) : null, [model]);
+    const embroideryRef = useRef({embroidering, embroideryAnchor, threadWeight, threadColor, onEmbroideryPoint, surface});
+    embroideryRef.current = {embroidering, embroideryAnchor, threadWeight, threadColor, onEmbroideryPoint, surface};
     const frames = useMemo(
       () =>
         buildStitchFrames(
@@ -250,16 +268,22 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
           if (!current) return;
           const previousBackground = current.scene.background;
           const previousMarker = current.marker.visible;
+          const anchor = current.embroidery.getObjectByName('embroidery-anchor');
+          const previousAnchor = anchor?.visible;
+          current.embroideryDraft.visible = false;
+          if (anchor) anchor.visible = false;
           current.scene.background = new THREE.Color("#f6f5f0");
           current.marker.visible = false;
           current.rows.setHidden(true);
           current.renderer.render(current.scene, current.camera);
-          const anchor = document.createElement("a");
-          anchor.href = current.renderer.domElement.toDataURL("image/png");
-          anchor.download = "loopform-model.png";
-          anchor.click();
+          const download = document.createElement("a");
+          download.href = current.renderer.domElement.toDataURL("image/png");
+          download.download = "loopform-model.png";
+          download.click();
           current.scene.background = previousBackground;
           current.marker.visible = previousMarker;
+          current.embroideryDraft.visible = true;
+          if (anchor) anchor.visible = previousAnchor!;
           current.rows.setHidden(false);
           current.renderer.render(current.scene, current.camera);
         },
@@ -321,6 +345,8 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
 
       const group = new THREE.Group();
       scene.add(group);
+      const embroideryGroup = new THREE.Group(), embroideryDraft = new THREE.Group();
+      scene.add(embroideryGroup, embroideryDraft);
       const marker = new THREE.Mesh(
         new THREE.RingGeometry(0.31, 0.35, 48),
         new THREE.MeshBasicMaterial({
@@ -401,6 +427,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         reset,
         rows: null! as RowManipulator,
         brush: null, previewColors:new Map(), stitchInstances:new Map(), bobbleInstances:new Map(), fabricVertices:new Map(),
+        embroidery: embroideryGroup, embroideryDraft, embroideryPointer: null,
       };
       current.rows = new RowManipulator(
         scene,
@@ -510,6 +537,35 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         if(current.nodes?.instanceColor)current.nodes.instanceColor.needsUpdate=true;
         if(current.bobbles?.instanceColor)current.bobbles.instanceColor.needsUpdate=true;
       }
+      const embroideryHit = (x: number, y: number) => {
+        if (!current.fabric) return null;
+        const rect = renderer.domElement.getBoundingClientRect();
+        if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return null;
+        camera.updateMatrixWorld();
+        pointer.set((x - rect.left) / rect.width * 2 - 1, -(y - rect.top) / rect.height * 2 + 1);
+        raycaster.setFromCamera(pointer, camera);
+        const hit = raycaster.intersectObject(current.fabric, false)[0];
+        return hit ? embroideryRef.current.surface?.pick(hit.point) ?? null : null;
+      };
+      const clearDraft = () => { disposeGroup(current.embroideryDraft); current.embroideryDraft.clear(); };
+      // Register before the color brush so embroidery owns left clicks, including Alt-clicks.
+      current.embroideryPointer = new EmbroideryPointer(renderer.domElement, {
+        enabled: () => embroideryRef.current.embroidering,
+        click: (x, y) => {
+          const anchor = embroideryHit(x, y);
+          // Native canvas events must commit before the next point is clicked.
+          if (anchor) flushSync(() => embroideryRef.current.onEmbroideryPoint(anchor));
+        },
+        hover: (x, y) => {
+          clearDraft(); setHover(null);
+          const options = embroideryRef.current, hit = embroideryHit(x, y);
+          if (!hit || !modelRef.current) return;
+          if (options.embroideryAnchor) {
+            current.embroideryDraft.add(createEmbroideryMesh(modelRef.current, [{from: options.embroideryAnchor, to: hit, weight: options.threadWeight, color: options.threadColor, line: 0}], displayRef.current.thickness, Infinity, true));
+          }
+        },
+        leave: clearDraft,
+      });
       current.brush=new StitchBrush(renderer.domElement,{
         tool:()=>paintRef.current.paintTool,color:()=>paintRef.current.brushColor,enabled:()=>paintRef.current.canPaint,
         hit:(x,y)=>hitTest({clientX:x,clientY:y}),
@@ -536,6 +592,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         down = null;
       };
       const pointerMove = (event: PointerEvent) => {
+        if (embroideryRef.current.embroidering) { setHover(null); renderer.domElement.style.cursor = 'crosshair'; return; }
         if (event.buttons) return;
         const point = hitTest(event);
         renderer.domElement.style.cursor = paintRef.current.paintTool!=="inspect" ? "crosshair" : point ? "pointer" : "grab";
@@ -610,6 +667,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         cancelAnimationFrame(frame);
         observer.disconnect();
         current.brush?.dispose();
+        current.embroideryPointer?.dispose();
         current.rows.dispose();
         controls.dispose();
         renderer.domElement.removeEventListener("pointerdown", pointerDown);
@@ -617,6 +675,8 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         renderer.domElement.removeEventListener("pointermove", pointerMove);
         renderer.domElement.removeEventListener("pointerleave", pointerLeave);
         disposeGroup(group);
+        disposeGroup(embroideryGroup);
+        disposeGroup(embroideryDraft);
         marker.geometry.dispose();
         (marker.material as THREE.Material).dispose();
         renderer.dispose();
@@ -816,6 +876,28 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
     }, [model, baseModel, frames, eyePlacements, visibleRounds, thickness, mode]);
 
     useEffect(() => {
+      const current = runtime.current;
+      if (!current) return;
+      disposeGroup(current.embroidery); current.embroidery.clear();
+      disposeGroup(current.embroideryDraft); current.embroideryDraft.clear();
+      if (model) {
+        current.embroidery.add(createEmbroideryMesh(model, embroidery, thickness, visibleRounds));
+        if (embroidering && embroideryAnchor) {
+          const point = surface?.sample(embroideryAnchor, 0.30 * thickness + THREADS[threadWeight].radius);
+          if (point) {
+            const pin = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 8), new THREE.MeshBasicMaterial({color: '#b987d0'}));
+            pin.name = 'embroidery-anchor';
+            pin.position.copy(point.position); current.embroidery.add(pin);
+          }
+        }
+      }
+      current.renderer.domElement.setAttribute('data-embroidery-lines', String(current.embroidery.children[0]?.children.length ?? 0));
+      const canvas = current.renderer.domElement;
+      const label = (canvas.getAttribute('aria-label') ?? '').replace(/ \d+ embroidery lines\./, '');
+      canvas.setAttribute('aria-label', `${label} ${current.embroidery.children[0]?.children.length ?? 0} embroidery lines.`);
+    }, [model, embroidery, thickness, visibleRounds, embroidering, embroideryAnchor, threadWeight, threadColor, surface]);
+
+    useEffect(() => {
       setHover(null);
       runtime.current?.rows.update(
         model,
@@ -854,10 +936,12 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
     useEffect(()=>{
       const current=runtime.current;if(!current)return;
       current.brush?.cancelStroke();
-      current.controls.mouseButtons.RIGHT=paintTool==='inspect'?THREE.MOUSE.PAN:THREE.MOUSE.ROTATE;
-      current.renderer.domElement.style.cursor=paintTool==='inspect'?'grab':'crosshair';
+      current.embroideryPointer?.cancel();
+      current.controls.mouseButtons.RIGHT=paintTool==='inspect'&&!embroidering?THREE.MOUSE.PAN:THREE.MOUSE.ROTATE;
+      current.renderer.domElement.style.cursor=paintTool==='inspect'&&!embroidering?'grab':'crosshair';
+      if (embroidering) current.renderer.domElement.focus({preventScroll:true});
       setHover(null);
-    },[paintTool,brushColor,canPaint]);
+    },[paintTool,brushColor,canPaint,embroidering]);
 
     return (
       <div className="model-viewer" ref={host}>

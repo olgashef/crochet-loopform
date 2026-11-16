@@ -63,7 +63,7 @@ test('restoring a stitch removes every duplicate override but preserves neighbor
 test('branch paint has written-color provenance and can be restored independently', () => {
   const base = '1 [#fff1ea]: 6 sc in mr\n2: sc, branch(3 ch, 2 slst), 5 sc';
   const branch = parsePattern(base).stitches.find(s => s.branch)!;
-  const painted = paintStitches(paintStitches(base, [branch.id], '#123456'), [0], '#abcdef');
+  const painted = base + `\npaint stitch ${branch.id + 1}: #123456\npaint 1: 1=#abcdef`;
   const before = parsePattern(painted);
   assert.equal(buildGeometry(before).points.find(p => p.id === branch.id)?.patternColor, '#fff1ea');
   const restored = parsePattern(restorePatternColors(painted, [branch.id]));
@@ -79,4 +79,22 @@ test('editing written yarn retains deliberate paint while updating its recorded 
   assert.equal(stitch.patternColor, '#112233');
   assert.equal(parsePattern(restorePatternColors(changed)).rounds[10].stitches[1].color, '#112233');
   assert.throws(() => restorePatternColors('Round 1: invalid\npaint 1: 1=#112233'), /Fix the pattern/);
+});
+
+test('brush colors are saved inline and survive repeated painting and text reload', () => {
+  const base = 'Round 1: 6 sc in mr\n// shaping\nRound 2: (sc, inc) x3\nRound 3-5: sc around\nfasten off';
+  const original = parsePattern(base);
+  const ids = [original.rounds[1].stitches[2].id, original.rounds[3].stitches[4].id];
+  const first = paintStitches(base, ids, '#123456');
+  assert.doesNotMatch(first, /^paint\b/m);
+  assert.match(first, /inc\[#[A-F0-9]{6},#123456\]/);
+  assert.match(first, /Round 4 \[#[A-F0-9]{6}\]: 4sc, sc\[#123456\], 4sc → 9/);
+  const second = paintStitches(first, [ids[0]], '#abcdef');
+  const reloaded = parsePattern(JSON.parse(JSON.stringify({ source: second })).source);
+  assert.deepEqual(reloaded.diagnostics, []);
+  assert.equal(reloaded.stitches[ids[0]].color, '#abcdef');
+  assert.equal(reloaded.stitches[ids[1]].color, '#123456');
+  assert.deepEqual(reloaded.stitches.map(s => [s.type, s.parents, s.isIncrease]), original.stitches.map(s => [s.type, s.parents, s.isIncrease]));
+  assert.equal(restorePatternColors(second), second);
+  assert.equal(paintStitches(second, [ids[0]], '#abcdef'), second);
 });

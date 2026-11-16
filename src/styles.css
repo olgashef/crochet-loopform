@@ -84,17 +84,17 @@ h1,h2,h3,p {
 }
 
 .app-header {
-  height:76px;
-  padding:0 35px;
+  height:52px;
+  padding:0 28px;
   display:flex;
   align-items:center;
   border-bottom:1px solid var(--border);
   background:#fff;
-  gap:62px
+  gap:40px
 }
 
 .brand {
-  font-size:25px;
+  font-size:22px;
   font-weight:650;
   letter-spacing:-1px;
   display:flex;
@@ -105,13 +105,13 @@ h1,h2,h3,p {
 .brand-mark {
   display:grid;
   place-items:center;
-  width:33px;
-  height:37px;
+  width:27px;
+  height:30px;
   color:#94739f;
   border:1.5px solid #b79fbe;
   border-radius:45%;
   font-family:Georgia,serif;
-  font-size:40px;
+  font-size:32px;
   line-height:1;
   transform:rotate(-15deg)
 }
@@ -205,7 +205,7 @@ h1,h2,h3,p {
   justify-content:space-between;
   gap:15px;
   align-items:center;
-  padding:17px 34px;
+  padding:7px 28px;
   border-bottom:1px solid var(--border);
   background:#fcfbfa
 }
@@ -255,13 +255,6 @@ h1,h2,h3,p {
   background:#7d5d87
 }
 
-.studio-intro {
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  padding:25px 35px 24px
-}
-
 .eyebrow {
   font-size:9px;
   font-weight:600;
@@ -269,26 +262,12 @@ h1,h2,h3,p {
   color:#a08ba6
 }
 
-.studio-intro h1 {
-  font-size:24px;
-  font-weight:500;
-  letter-spacing:-.7px;
-  margin-top:5px
-}
-
-.studio-intro p {
-  font-size:11px;
-  color:#9d949f;
-  line-height:1.7;
-  text-align:right
-}
-
 .workspace {
   display:grid;
   grid-template-columns:220px minmax(340px,1fr) minmax(380px,1.18fr);
   gap:14px;
-  margin:0 28px;
-  height:calc(100vh - 352px);
+  margin:12px 28px 0;
+  height:calc(100dvh - 210px);
   min-height:610px;
   max-height:1000px
 }
@@ -1390,17 +1369,14 @@ input[type=range] {
   .workspace {
     grid-template-columns:185px minmax(270px,1fr) minmax(300px,1fr);
     gap:9px;
-    margin:0 16px
+    margin:12px 16px 0
   }
   .app-header {
     gap:30px;
     padding:0 22px
   }
   .project-bar {
-    padding:14px 22px
-  }
-  .studio-intro {
-    padding:23px
+    padding:7px 22px
   }
   .stitch-card {
     padding:9px 1px;
@@ -1450,20 +1426,14 @@ input[type=range] {
   .workspace.library-collapsed {
     grid-template-columns:minmax(280px,1fr) minmax(300px,1fr)
   }
-  .studio-intro h1 {
-    font-size:22px
-  }
   .local-badge {
     display:none
   }
   .app-header {
-    height:65px
+    height:52px
   }
   .header-end {
     gap:10px
-  }
-  .studio-intro {
-    padding:22px 18px
   }
   .project-title input {
     width:150px
@@ -1473,7 +1443,7 @@ input[type=range] {
 @media(max-width:650px) {
   .app-header {
     padding:0 15px;
-    height:58px;
+    height:52px;
     gap:16px
   }
   .brand {
@@ -1502,7 +1472,7 @@ input[type=range] {
     width:25px
   }
   .project-bar {
-    padding:11px 14px;
+    padding:7px 14px;
     align-items:start;
     gap:10px
   }
@@ -1526,19 +1496,10 @@ input[type=range] {
   .project-actions button svg {
     width:13px
   }
-  .studio-intro {
-    padding:20px 17px
-  }
-  .studio-intro h1 {
-    font-size:20px
-  }
-  .studio-intro p {
-    display:none
-  }
   .workspace,.workspace.library-collapsed {
     display:flex;
     flex-direction:column;
-    margin:0 12px;
+    margin:12px 12px 0;
     height:auto;
     max-height:none;
     min-height:0;
@@ -1683,3 +1644,23 @@ input[type=range] {
 @media(max-width:720px){.preview:has(.paint-tools){height:760px}}
 
 .stitch-symbol .safety-eyes-icon { display:block; flex-shrink:0; width:28px; max-width:100%; height:24px; }
+
+.embroidery-controls { padding:12px 16px; border-top:1px solid var(--border); background:#fcf9fd; }
+.embroidery-heading,.embroidery-options { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.embroidery-heading strong { display:flex; align-items:center; gap:6px; font-size:12px; }
+.embroidery-heading>span { color:var(--muted); font-size:10px; }
+.embroidery-heading>button { margin-left:auto; padding:5px 9px; }
+.embroidery-heading kbd { font:9px inherit; opacity:.8; }
+.embroidery-options { margin:10px 0; }
+.embroidery-options label { display:flex; align-items:center; gap:6px; font-size:11px; }
+.embroidery-options select { max-width:160px; font-size:11px; }
+.embroidery-options input[type=color] { width:32px; height:30px; padding:2px; cursor:pointer; }
+.embroidery-options button { padding:6px 8px; font-size:11px; }
+.embroidery-controls p { font-size:11px; line-height:1.5; }
+.embroidery-controls small { display:block; margin-top:5px; color:var(--muted); font-size:10px; }
+.embroidery-list { display:flex; flex-wrap:wrap; gap:8px; padding:12px 16px; border-top:1px solid var(--border); font-size:11px; max-height:210px; overflow:auto; }
+.embroidery-list>strong { flex:1; align-self:center; }
+.embroidery-list>div { width:100%; display:flex; align-items:center; gap:8px; }
+.embroidery-list>div>button { margin-left:auto; }
+.embroidery-list i { width:14px; height:14px; border-radius:50%; border:1px solid var(--border); }
+@media(max-width:1150px) { .view-mode button[aria-label="Embroider"] span { display:none; } }

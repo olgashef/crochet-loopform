@@ -96,3 +96,8 @@
   background: #fffefa;
   box-shadow: 0 5px 20px #344e3d12;
 }
+
+.pattern-code-editor .cm-yarn-color {
+  border-radius: 2px;
+  padding-bottom: 1px;
+}

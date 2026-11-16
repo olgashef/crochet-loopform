@@ -1,5 +1,6 @@
 import { parseEyeDirective, validateEyePair, type SafetyEyePair } from "./safetyEyes";
 import type { PatternOrientation } from "./orientation";
+import { MAX_EMBROIDERY, parseEmbroideryDirective, validateEmbroidery, type EmbroiderySegment } from './embroidery';
 
 export type StitchType = "sc" | "hdc" | "dc" | "tr" | "ch" | "slst" | "dec" | "bobble";
 
@@ -41,6 +42,7 @@ export interface Diagnostic {
 export interface ParsedPattern {
   orientation: PatternOrientation;
   eyes: SafetyEyePair[];
+  embroidery: EmbroiderySegment[];
   rounds: PatternRound[];
   stitches: Stitch[];
   diagnostics: Diagnostic[];
@@ -129,7 +131,7 @@ export type Operation =
   | { color: string; name: string }
   | { stitch: StitchType | "inc"; colors: (string | null)[]; name: string }
   | { same: Operation[] }
-  | { branch: { chain: number; slip: number } };
+  | { branch: { chain: number; slip: number; colors?: (string | null)[] } };
 
 function operationCounts(op: Operation): { input: number; output: number; total: number } {
   if (typeof op !== "string" && "stitch" in op) return operationCounts(op.stitch);
@@ -245,21 +247,21 @@ function parseOperations(source: string): Operation[] {
         cursor++;
         if (tokens[cursor++]?.value !== "(")
           throw new PatternSyntaxError("Use branch(12 ch, 11 slst) for a chain out and return.");
-        const chain = readCount();
-        if (!["ch", "chain"].includes(tokens[cursor++]?.value ?? ""))
-          throw new PatternSyntaxError("A branch starts with a chain count, for example branch(12 ch, 11 slst).");
-        let slip = 0;
-        if (tokens[cursor]?.value === ",") {
-          cursor++;
-          slip = readCount();
-          if (!["slst", "ss"].includes(tokens[cursor++]?.value ?? ""))
-            throw new PatternSyntaxError("Return along a branch with slip stitches, for example branch(12 ch, 11 slst).");
-          if (slip !== chain - 1)
-            throw new PatternSyntaxError("A returning branch starts in the second chain from the hook: use one fewer slip stitch than chains.");
+        const inner = sequence(depth + 1).operations;
+        if (tokens[cursor++]?.value !== ")") throw new PatternSyntaxError("A branch is missing its closing ).");
+        const types: string[] = [], colors: (string | null)[] = [];
+        let branchColor: string | null = null;
+        for (const op of inner) {
+          if (typeof op !== 'string' && 'color' in op) { branchColor = op.color; continue; }
+          const type = typeof op === 'string' ? op : 'stitch' in op ? op.stitch : '';
+          if (type !== 'ch' && type !== 'slst') throw new PatternSyntaxError('A branch supports chains followed by slip stitches.');
+          types.push(type);
+          colors.push(typeof op !== 'string' && 'stitch' in op ? op.colors[0] ?? branchColor : branchColor);
         }
-        if (tokens[cursor++]?.value !== ")")
-          throw new PatternSyntaxError("A branch is missing its closing ).");
-        append(result, { operations: [{ branch: { chain, slip } }], stitchCount: chain + slip }, 1);
+        const chain = types.filter(t => t === 'ch').length, slip = types.length - chain;
+        if (!chain || types.some((t, i) => t !== (i < chain ? 'ch' : 'slst')) || (slip && slip !== chain - 1))
+          throw new PatternSyntaxError('Use branch(12 ch, 11 slst): chains first, then one fewer slip stitch.');
+        append(result, { operations: [{ branch: { chain, slip, colors } }], stitchCount: chain + slip }, 1);
         continue;
       }
       if (tokens[cursor].color) {
@@ -420,6 +422,7 @@ export function parsePattern(source: string): ParsedPattern {
     orientation: "bottom-up",
     rounds: [],
     eyes: [],
+    embroidery: [],
     stitches: [],
     diagnostics: [],
     name: "Untitled pattern",
@@ -478,6 +481,12 @@ export function parsePattern(source: string): ParsedPattern {
         if (!match) throw new PatternSyntaxError("Use orientation top-down or orientation bottom-up on its own line.");
         parsed.orientation = match[1].toLowerCase() as PatternOrientation;
         explicitOrientation = true;
+        continue;
+      }
+      const embroidery = parseEmbroideryDirective(line, lineNumber);
+      if (embroidery) {
+        if (parsed.embroidery.length >= MAX_EMBROIDERY) throw new PatternSyntaxError(`Use at most ${MAX_EMBROIDERY} embroidery lines per piece.`);
+        parsed.embroidery.push(embroidery);
         continue;
       }
       const eyes = parseEyeDirective(line, lineNumber);
@@ -607,10 +616,13 @@ export function parsePattern(source: string): ParsedPattern {
             const chainStitches: Stitch[] = [];
             for (let step = 1; step <= chain; step++) {
               const parent = chainStitches.at(-1)?.id ?? anchor.id;
-              chainStitches.push(create("ch", [parent], false, { anchor: anchor.id, step, length: chain, returning: false }));
+              const child = create("ch", [parent], false, { anchor: anchor.id, step, length: chain, returning: false });
+              child.color = operation.branch.colors?.[step - 1] ?? color;
+              chainStitches.push(child);
             }
             for (let step = slip; step >= 1; step--) {
-              create("slst", [chainStitches[step - 1].id], false, { anchor: anchor.id, step, length: chain, returning: true });
+              const child = create("slst", [chainStitches[step - 1].id], false, { anchor: anchor.id, step, length: chain, returning: true });
+              child.color = operation.branch.colors?.[chain + slip - step] ?? color;
             }
             if (!slip) previous = anchor.id;
             continue;
@@ -681,6 +693,10 @@ export function parsePattern(source: string): ParsedPattern {
     else parsed.diagnostics.push({ line: paint.line, severity: "error", message: `Paint references missing stitch ${paint.index} in round ${paint.round}.` });
   }
   for (const round of parsed.rounds) round.color = round.stitches[0].color;
+  for (const segment of parsed.embroidery) {
+    const message = validateEmbroidery(segment, parsed.rounds);
+    if (message) parsed.diagnostics.push({ line: segment.line, severity: 'error', message });
+  }
   for (const eyes of parsed.eyes) {
     const message = validateEyePair(eyes, parsed.rounds);
     if (message) parsed.diagnostics.push({ line: eyes.line, severity: "error", message });

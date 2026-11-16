@@ -1,3 +1,4 @@
+import { writePatternColors } from './patternColors';
 import { parsePattern, type ParsedPattern } from './pattern';
 export type ColorScope = 'Stitch' | 'Multi' | 'Patch' | 'Round' | 'Whole piece';
 export function colorSelection(pattern: ParsedPattern, id: number, scope: ColorScope): number[] {
@@ -23,26 +24,7 @@ export function colorSelection(pattern: ParsedPattern, id: number, scope: ColorS
 /** Keep construction instructions intact, including increases and nested repeats. */
 export function paintStitches(source: string, ids: number[], color: string): string {
   if (!/^#[a-f0-9]{6}$/i.test(color)) throw new Error('Choose a six-digit hex color.');
-  const pattern = parsePattern(source);
-  if (pattern.diagnostics.some(d => d.severity === 'error')) throw new Error('Fix the pattern before painting.');
-  const selected = new Set(ids);
-  const base = source.split('\n').filter(line => !/^paint\b/i.test(line.trim())).join('\n').trimEnd();
-  const original = parsePattern(base);
-  const lines: string[] = [];
-  for (const round of pattern.rounds) {
-    const entries = round.stitches.flatMap(s => {
-      const next = selected.has(s.id) ? color : s.color;
-      return next.toLowerCase() === original.stitches[s.id]?.color.toLowerCase() ? [] : [`${s.index + 1}=${next}`];
-    });
-    if (entries.length) lines.push(`paint ${round.number}: ${entries.join(', ')}`);
-  }
-  for (const stitch of pattern.stitches.filter(s => s.branch)) {
-    const next = selected.has(stitch.id) ? color : stitch.color;
-    if (next.toLowerCase() !== original.stitches[stitch.id]?.color.toLowerCase()) lines.push(`paint stitch ${stitch.id + 1}: ${next}`);
-  }
-  const result = base + (lines.length ? '\n\n' + lines.join('\n') : '');
-  if(result.length > 120000) throw new Error('The painted pattern exceeds the 120,000 character limit.');
-  return result;
+  return writePatternColors(source, ids, color);
 }
 
 /** Accept copied hex values without converting through rendered/lighted pixels. */
