@@ -1,3 +1,4 @@
+import { completeRoundCount } from "../lib/completeRoundCount";
 import { useEffect, useRef } from "react";
 import {
   EditorSelection,
@@ -223,6 +224,7 @@ export function PatternEditor({
                 return true;
               },
             },
+            { key: "Tab", run: completeRoundCount },
             ...defaultKeymap,
             ...historyKeymap,
             indentWithTab,

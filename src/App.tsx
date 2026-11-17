@@ -1,3 +1,4 @@
+import { pieceName, setPieceName } from "./lib/pieceName";
 import { setPieceEdge, type PieceEdge } from './lib/pieceEdge';
 import { ProjectLibrary } from './components/ProjectLibrary';
 import { projectSettings, saveLibraryProject, type ProjectSettings } from './lib/projectLibrary';
@@ -17,7 +18,7 @@ import { SafetyEyesDialog } from './components/SafetyEyesDialog';
 import type { SafetyEyePair } from './lib/safetyEyes';
 import { buildGeometry } from './lib/geometry';
 import { parsePattern } from './lib/pattern';
-import { projectContentKey, receiveProject } from './lib/projectSync';
+import { projectContentKey, receiveProject, canReceiveProject } from './lib/projectSync';
 import { colorSelection, paintStitches, type ColorScope } from './lib/colorwork';
 import { download, initialProject, newPiece, STUDIO_EXAMPLES, validProject, type Project } from './lib/studio';
 import { setPatternOrientation, type PatternOrientation } from './lib/orientation';
@@ -41,12 +42,14 @@ const LIBRARY = [
 ];
 const PALETTE = ['#f3e8d6','#cba477','#9a674a','#493a37','#e9bb4e','#d87b55','#dc969c','#a291bc','#8aa58b','#5c8580','#799cb5','#efefea'];
 function normalizeColors(project: Project): Project {
-  return {...project, id: project.id ?? crypto.randomUUID(), pieces: project.pieces.map(piece => ({...piece, source: migratePatternColors(piece.source)}))};
+  return {...project, id: project.id ?? crypto.randomUUID(), pieces: project.pieces.map(piece => ({...piece, name: pieceName(piece), source: migratePatternColors(piece.source)}))};
 }
 export default function App() {
   const [project, setProject] = useState<Project>(() => normalizeColors(initialProject()));
   const [libraryVisible, setLibraryVisible] = useState(false);
   const persistedKey = useRef<string|null>(null);
+  const persistedSelection = useRef<string|null>(null);
+  const [dragging, setDragging] = useState(false);
   const [past, setPast] = useState<Project[]>([]); const [future, setFuture] = useState<Project[]>([]);
   const piece = project.pieces.find(p => p.id === project.activeId)!;
   const source = piece.source;
@@ -89,13 +92,29 @@ export default function App() {
   function undo() { if (!past.length) return; setEmbroideryAnchor(null); setFuture(p => [project, ...p]); setProject(past[past.length-1]); setPast(p => p.slice(0,-1)); setSelection([]); setAssemblyTool('select'); }
   function redo() { if (!future.length) return; setEmbroideryAnchor(null); setPast(p => [...p, project]); setProject(future[0]); setFuture(p => p.slice(1)); setSelection([]); setAssemblyTool('select'); }
   const snapshot = useMemo<Project>(()=>({...project, settings:{view,backdrop,editorMode,mode,roundLimit,thickness,color,threadWeight,threadColor,libraryOpen}}),[project,view,backdrop,editorMode,mode,roundLimit,thickness,color,threadWeight,threadColor,libraryOpen]);
+  const latestSnapshot = useRef(snapshot);
+  latestSnapshot.current = snapshot;
+  function beginDrag() { dragSnapshot.current=project;setDragging(true); }
+  function endDrag() {
+    const before=dragSnapshot.current;
+    if(before && JSON.stringify(before.pieces)!==JSON.stringify(latestSnapshot.current.pieces)) {
+      setPast(p=>[...p.slice(-49),before]);setFuture([]);
+    }
+    dragSnapshot.current=null;setDragging(false);
+  }
   function applySettings(settings?: ProjectSettings) {
     const next=projectSettings(settings);
     setView(next.view);setBackdrop(next.backdrop);setEditorMode(next.editorMode);setMode(next.mode);
     setRoundLimit(next.roundLimit);setThickness(next.thickness);setColor(next.color);
     setThreadWeight(next.threadWeight);setThreadColor(next.threadColor);setLibraryOpen(next.libraryOpen);
   }
-  async function persistCurrent() { await saveLibraryProject(snapshot);setSaved(true); }
+  async function persistCurrent() {
+    await saveLibraryProject(snapshot);
+    if (latestSnapshot.current !== snapshot) return;
+    persistedKey.current=projectContentKey(snapshot);persistedSelection.current=snapshot.activeId;
+    try {localStorage.setItem('loopform.studio.v2',JSON.stringify(snapshot));} catch { /* IndexedDB has saved the project. */ }
+    setSaved(true);
+  }
   async function openLibraryProject(next: Project) {
     await persistCurrent();
     const restored=normalizeColors(next);
@@ -113,24 +132,39 @@ export default function App() {
   }
   useEffect(() => {
     const key=projectContentKey(snapshot);
-    try {localStorage.setItem('loopform.studio.v2',JSON.stringify(snapshot));persistedKey.current=key;} catch { /* The library can still save when localStorage is full. */ }
+    if(key===persistedKey.current && snapshot.activeId===persistedSelection.current){setSaved(true);return;}
     setSaved(false);
-    const timer=setTimeout(()=>{saveLibraryProject(snapshot).then(()=>setSaved(true)).catch(e=>{setSaved(false);setToast(e.message);});},300);
-    return ()=>clearTimeout(timer);
-  },[snapshot]);
+    // Keep intermediate handle positions local. Publish only a settled edit.
+    if(dragging)return;
+    let cancelled=false;
+    const timer=setTimeout(()=>{
+      saveLibraryProject(snapshot).then(()=>{
+        if(cancelled || latestSnapshot.current!==snapshot)return;
+        persistedKey.current=key;persistedSelection.current=snapshot.activeId;
+        try {localStorage.setItem('loopform.studio.v2',JSON.stringify(snapshot));} catch { /* The library still holds the saved project. */ }
+        setSaved(true);
+      }).catch(e=>{if(!cancelled){setSaved(false);setToast(e.message);}});
+    },300);
+    return ()=>{cancelled=true;clearTimeout(timer);};
+  },[snapshot,dragging]);
   useEffect(() => {
     function receive(event:StorageEvent) {
       if(event.key!=='loopform.studio.v2'||!event.newValue)return;
       try {
         const incoming:unknown=JSON.parse(event.newValue);
-        if(!validProject(incoming) || incoming.id !== project.id)return;
-        const key=projectContentKey(incoming);if(key===persistedKey.current)return;
-        applySettings(incoming.settings);
-        setProject(current=>receiveProject(current,normalizeColors(incoming)));setPast([]);setFuture([]);setSelection([]);setSaved(true);
+        if(!validProject(incoming))return;
+        const current=latestSnapshot.current;
+        if(!canReceiveProject(current,incoming,persistedKey.current,!!dragSnapshot.current))return;
+        const next=receiveProject(current,normalizeColors(incoming));
+        // A received document is already persisted. Never echo it back to its sender.
+        persistedKey.current=projectContentKey(next);persistedSelection.current=next.activeId;
+        latestSnapshot.current=next;
+        applySettings(next.settings);
+        setProject(next);setPast([]);setFuture([]);setSelection([]);setSaved(true);
       } catch { /* Ignore incomplete writes from another tab. */ }
     }
     window.addEventListener('storage',receive);return()=>window.removeEventListener('storage',receive);
-  },[project.id]);
+  },[]);
   useEffect(() => { setSelection([]); setSelectedRow(null); setPlaying(false); setAssemblyTool('select'); }, [piece.id]);
   useEffect(() => { if (!playing) return; const timer = setInterval(() => setRoundLimit(r => { if (r >= rounds) { setPlaying(false); return rounds; } return r+1; }), 450); return () => clearInterval(timer); }, [playing, rounds]);
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(''), 3500); return () => clearTimeout(t); }, [toast]);
@@ -202,7 +236,7 @@ export default function App() {
     if(record) update({...project,pieces:project.pieces.map(p=>p.id===id?{...p,placement:next}:p)});
     else setProject(p=>({...p,pieces:p.pieces.map(x=>x.id===id?{...x,placement:next}:x)}));
   }
-  function duplicatePiece() { addPiece(source,`${piece.name} copy`,piece.rowOffsets,piece.id===mainPiece.id?undefined:{...placement,position:[placement.position[0]+1,placement.position[1],placement.position[2]]}); }
+  function duplicatePiece() { addPiece(setPieceName(source,`${piece.name} copy`),`${piece.name} copy`,piece.rowOffsets,piece.id===mainPiece.id?undefined:{...placement,position:[placement.position[0]+1,placement.position[1],placement.position[2]]}); }
   function selectPiece(id: string) {setProject(p=>({...p,activeId:id}));setAssemblyTool('select');}
   function startAttachment() {
     if(assemblyTool==='place'){setAssemblyTool('select');return;}
@@ -224,17 +258,17 @@ export default function App() {
       </aside>
       <section className="editor panel">
         <div className="panel-heading"><span><span className="dot mauve"/>Pattern editor</span><div className="heading-tools"><button className="icon" aria-label="Undo" disabled={!past.length} onClick={undo}><Undo2 size={16}/></button><button className="icon" aria-label="Redo" disabled={!future.length} onClick={redo}><Redo2 size={16}/></button><span className="divider"/><button className="icon" title="Pattern syntax" onClick={() => setMenu('help')}><CircleHelp size={15}/></button></div></div>
-        <div className="piece-tabs" aria-label="Pattern pieces">{project.pieces.map(p => <button className={p.id===piece.id?'active':''} key={p.id} onClick={() => selectPiece(p.id)}><span className="dot"/>{p.name}{p.id===mainPiece.id&&<small className="main-piece-tag">MAIN</small>}</button>)}<button className="add-piece" title="Add piece" onClick={() => addPiece()}><Plus size={14}/></button></div>
+        <div className="piece-tabs" aria-label="Pattern pieces">{project.pieces.map(p => <button className={p.id===piece.id?'active':''} key={p.id} onClick={() => selectPiece(p.id)}><span className="dot"/>{p.id===mainPiece.id?<strong title="Main piece">{p.name}</strong>:p.name}</button>)}<button className="add-piece" title="Add piece" onClick={() => addPiece()}><Plus size={14}/></button></div>
         <div className="editor-toolbar"><div className="segmented"><button className={editorMode==='code'?'active':''} onClick={() => setEditorMode('code')}>Pattern</button><button className={editorMode==='rounds'?'active':''} onClick={() => setEditorMode('rounds')}>Rounds</button></div><span className="live-status"><span/>Live preview</span></div>
         <div className="editor-body">{editorMode==='code'?<PatternEditor key={piece.id} value={source} onChange={changeSource} diagnostics={parsed.diagnostics} onRender={() => setRoundLimit(150)} selectedLine={selected?.paintSourceLine ?? selected?.sourceLine ?? null}/>:<PatternWorksheet value={source} onChange={changeSource} diagnostics={parsed.diagnostics} selectedLine={selected?.sourceLine ?? null} onRender={() => setRoundLimit(150)} onEditingChange={() => {}}/>}</div>
         <div className="editor-bottom"><button onClick={addRound} disabled={!!errors.length || rounds>=150}><Plus size={14}/>Add round</button><span>{rounds} rounds <i>·</i> {parsed.stitches.length.toLocaleString()} stitches</span></div>
-        <details className="piece-details"><summary>Piece settings & accessories</summary><div className="piece-controls"><label>Name<input aria-label="Piece name" value={piece.name} onChange={e => update({...project,pieces:project.pieces.map(p => p.id===piece.id?{...p,name:e.target.value}:p)})}/></label><label>First round<select value={parsed.orientation} onChange={e => changeSource(setPatternOrientation(source,e.target.value as PatternOrientation))}><option value="bottom-up">At bottom</option><option value="top-down">At top</option></select></label><label>Last edge<select aria-label="Last edge" value={parsed.edge ?? 'auto'} onChange={e=>changeSource(setPieceEdge(source,e.target.value as PieceEdge))}><option value="auto">From stitch counts</option><option value="open">Keep open</option></select></label><button onClick={duplicatePiece}><Copy size={14}/>Duplicate</button><button disabled={piece.id===mainPiece.id} title={piece.id===mainPiece.id?'Keep the main piece as the assembly base':'Remove this piece'} onClick={() => {const remaining=project.pieces.filter(p=>p.id!==piece.id);update({...project,pieces:remaining,activeId:remaining[0].id});}}><Trash2 size={14}/>Remove</button></div><SafetyEyeControls source={source} pattern={parsed} onChange={changeSource} onAdd={()=>setEyeDialog({})} onEdit={pair=>setEyeDialog({pair})}/><div className="embroidery-list"><strong>Embroidery · {parsed.embroidery.length} lines</strong><button onClick={startEmbroidery}><Scissors size={14}/>Add embroidery</button>{parsed.embroidery.map((segment,i)=><div key={segment.line}><i style={{background:segment.color}}/><span>Line {i+1} · {segment.weight==='embroidery'?'Embroidery thread':segment.weight==='dk'?'DK yarn':'Super bulky yarn'}</span><button aria-label={`Remove embroidery line ${i+1}`} onClick={()=>{setEmbroideryAnchor(null);changeSource(source.split('\n').filter((_,line)=>line!==segment.line-1).join('\n'));}}><Trash2 size={13}/></button></div>)}</div></details>
+        <details className="piece-details"><summary>Piece settings & accessories</summary><div className="piece-controls"><label>Name<input aria-label="Piece name" value={piece.name} onChange={e => update({...project,pieces:project.pieces.map(p => p.id===piece.id?{...p,name:e.target.value,source:setPieceName(p.source,e.target.value)}:p)})}/></label><label>First round<select value={parsed.orientation} onChange={e => changeSource(setPatternOrientation(source,e.target.value as PatternOrientation))}><option value="bottom-up">At bottom</option><option value="top-down">At top</option></select></label><label>Last edge<select aria-label="Last edge" value={parsed.edge ?? 'auto'} onChange={e=>changeSource(setPieceEdge(source,e.target.value as PieceEdge))}><option value="auto">From stitch counts</option><option value="open">Keep open</option></select></label><button onClick={duplicatePiece}><Copy size={14}/>Duplicate</button><button disabled={piece.id===mainPiece.id} title={piece.id===mainPiece.id?'Keep the main piece as the assembly base':'Remove this piece'} onClick={() => {const remaining=project.pieces.filter(p=>p.id!==piece.id);update({...project,pieces:remaining,activeId:remaining[0].id});}}><Trash2 size={14}/>Remove</button></div><SafetyEyeControls source={source} pattern={parsed} onChange={changeSource} onAdd={()=>setEyeDialog({})} onEdit={pair=>setEyeDialog({pair})}/><div className="embroidery-list"><strong>Embroidery · {parsed.embroidery.length} lines</strong><button onClick={startEmbroidery}><Scissors size={14}/>Add embroidery</button>{parsed.embroidery.map((segment,i)=><div key={segment.line}><i style={{background:segment.color}}/><span>Line {i+1} · {segment.weight==='embroidery'?'Embroidery thread':segment.weight==='dk'?'DK yarn':'Super bulky yarn'}</span><button aria-label={`Remove embroidery line ${i+1}`} onClick={()=>{setEmbroideryAnchor(null);changeSource(source.split('\n').filter((_,line)=>line!==segment.line-1).join('\n'));}}><Trash2 size={13}/></button></div>)}</div></details>
       </section>
       <section className="preview panel" ref={panel}>
         <div className="panel-heading"><span><Box size={16}/>Your creation<span className="preview-tag">LIVE</span></span><div className="heading-tools"><div className="segmented"><button aria-label="3D view" className={view==='3d'?'active':''} onClick={() => setView('3d')}>Piece</button><button aria-label="Assembly view" className={view==='assembly'?'active':''} onClick={()=>{setView('assembly');setPlaying(false);}}>Assembly</button><button aria-label="Stitch chart" className={view==='chart'?'active':''} onClick={() => setView('chart')}><Grid2X2 size={14}/></button></div><button className="icon" title="Fullscreen preview" onClick={() => document.fullscreenElement ? document.exitFullscreen() : panel.current?.requestFullscreen()}><Maximize2 size={15}/></button></div></div>
         <div className="viewport" data-backdrop={backdrop}>
           <div className="view-top">{view==='assembly'?<div className="view-mode assembly-modes">{(['select','translate','rotate'] as const).map(t=><button key={t} className={assemblyTool===t?'active':''} onClick={()=>setAssemblyTool(t)}>{t==='select'?'Explore':t==='translate'?'Move':'Rotate'}</button>)}</div>:<div className="view-mode"><button className={!paint&&!moveRows&&!embroidering?'active':''} onClick={() => {setPaint(false);setMoveRows(false);setEmbroidering(false);setEmbroideryAnchor(null);}}><MousePointer2 size={14}/>Explore</button><button className={paint?'active':''} onClick={() => useColorTool('brush')}><Paintbrush size={14}/>Color</button><button className={moveRows?'active':''} title="Move individual rounds" onClick={() => {setMoveRows(!moveRows);setPaint(false);setEmbroidering(false);setEmbroideryAnchor(null);}}><MoveVertical size={14}/></button><button aria-label="Embroider" title="Draw embroidery on the piece" className={embroidering?'active':''} onClick={startEmbroidery}><Scissors size={14}/><span>Embroider</span></button></div>}<button className="view-focus" title="Center model" onClick={() => viewer.current?.resetView()}><Focus size={18}/></button></div>
-          {view==='assembly'?<AssemblyViewer ref={viewer} pieces={project.pieces} activeId={piece.id} tool={assemblyTool} thickness={thickness} onSelect={selectPiece} onPlace={(id,next)=>{changePlacement(next,id);setAssemblyTool('select');setToast('Piece attached. Use Move or Rotate to fine-tune it.');}} onTransform={(id,next)=>changePlacement(next,id,false)} onDragStart={()=>{dragSnapshot.current=project;}} onDragEnd={()=>{if(dragSnapshot.current){const before=dragSnapshot.current;setPast(p=>[...p.slice(-49),before]);setFuture([]);dragSnapshot.current=null;}}}/>:view==='3d'?<ModelViewer ref={viewer} model={model} safetyEyes={parsed.eyes} embroidery={parsed.embroidery} embroidering={embroidering} embroideryAnchor={embroideryAnchor} threadWeight={threadWeight} threadColor={threadColor} onEmbroideryPoint={embroideryPoint} rowOffsets={piece.rowOffsets} moveRows={moveRows} selectedRow={selectedRow} onSelectRow={setSelectedRow} onRowMove={(row,value) => setProject(p=>({...p,pieces:p.pieces.map(x=>x.id===piece.id?{...x,rowOffsets:{...x.rowOffsets,[row]:value}}:x)}))} onRowDragStart={() => {setPast(p=>[...p.slice(-49),project]);setFuture([]);}} onRowDragEnd={() => {}} visibleRounds={visibleRounds} thickness={thickness} mode={mode} selectedStitch={selected?.id ?? null} selectedStitches={selection} paintTool={paint&&colorTool!=='select'?colorTool:'inspect'} brushColor={color} canPaint={!errors.length} onBrush={brushStitches} onSample={sampleColor} onSelect={select}/>:<StitchChart pattern={parsed} visibleRounds={visibleRounds} selection={selection} tool={paint&&colorTool!=='select'?colorTool:'inspect'} color={color} canPaint={!errors.length} onSelect={select} onBrush={brushStitches} onSample={sampleColor}/>}
+          {view==='assembly'?<AssemblyViewer ref={viewer} pieces={project.pieces} activeId={piece.id} tool={assemblyTool} thickness={thickness} onSelect={selectPiece} onPlace={(id,next)=>{changePlacement(next,id);setAssemblyTool('select');setToast('Piece attached. Use Move or Rotate to fine-tune it.');}} onTransform={(id,next)=>changePlacement(next,id,false)} onDragStart={beginDrag} onDragEnd={endDrag}/>:view==='3d'?<ModelViewer ref={viewer} model={model} safetyEyes={parsed.eyes} embroidery={parsed.embroidery} embroidering={embroidering} embroideryAnchor={embroideryAnchor} threadWeight={threadWeight} threadColor={threadColor} onEmbroideryPoint={embroideryPoint} rowOffsets={piece.rowOffsets} moveRows={moveRows} selectedRow={selectedRow} onSelectRow={setSelectedRow} onRowMove={(row,value) => setProject(p=>({...p,pieces:p.pieces.map(x=>x.id===piece.id?{...x,rowOffsets:{...x.rowOffsets,[row]:value}}:x)}))} onRowDragStart={beginDrag} onRowDragEnd={endDrag} visibleRounds={visibleRounds} thickness={thickness} mode={mode} selectedStitch={selected?.id ?? null} selectedStitches={selection} paintTool={paint&&colorTool!=='select'?colorTool:'inspect'} brushColor={color} canPaint={!errors.length} onBrush={brushStitches} onSample={sampleColor} onSelect={select}/>:<StitchChart pattern={parsed} visibleRounds={visibleRounds} selection={selection} tool={paint&&colorTool!=='select'?colorTool:'inspect'} color={color} canPaint={!errors.length} onSelect={select} onBrush={brushStitches} onSample={sampleColor}/>}
           {view!=='assembly' && paint && colorTool==='select' && <div className="color-scope"><span>SELECT BY</span>{(['Stitch','Multi','Patch','Round','Whole piece'] as ColorScope[]).map(s => <button className={scope===s?'active':''} key={s} onClick={() => {setScope(s);setSelection([]);}}>{s}</button>)}</div>}
           {view!=='assembly' && moveRows && <div className="row-control">{selectedRow ? <><strong>Round {selectedRow}</strong><label>Height<input aria-label="Row height" type="number" step="0.1" value={piece.rowOffsets[selectedRow]??0} onChange={e=>update({...project,pieces:project.pieces.map(p=>p.id===piece.id?{...p,rowOffsets:{...p.rowOffsets,[selectedRow]:Number(e.target.value)}}:p)})}/></label><button onClick={()=>update({...project,pieces:project.pieces.map(p=>p.id===piece.id?{...p,rowOffsets:{}}:p)})}>Reset rounds</button></>:'Click a round, then drag the height handle.'}</div>}
           <div className="view-label"><span className="dot"/>{view==='assembly'?`${project.pieces.length} pieces`:piece.name}<span>·</span>{view==='assembly'?'Assembly':mode==='stitches'?(model.endClosed===false?'Open piece':'Finished fabric'):'Stitch structure'}</div>

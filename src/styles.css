@@ -1575,7 +1575,7 @@ input[type=range] {
 }
 
 /* Piece assembly */
-.main-piece-tag { font-size:8px; letter-spacing:.06em; color:var(--muted); margin-left:5px; }
+.piece-tabs button strong { font-weight: 700; }
 .assembly-prompt { position:absolute; bottom:40px; left:16px; right:16px; z-index:3; pointer-events:none; display:flex; flex-direction:column; gap:5px; width:fit-content; max-width:calc(100% - 32px); padding:10px 14px; border:1px solid #b990ce; border-radius:9px; color:#f5eafa; background:#35283ee8; font-size:12px; }
 .assembly-prompt span { font-size:11px; color:#d4bfdc; }
 .assembly-controls { border-top:1px solid var(--line); padding:14px 16px 10px; background:#fffefa; font-size:11px; }

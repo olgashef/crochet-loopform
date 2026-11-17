@@ -180,7 +180,7 @@ export const AssemblyViewer = forwardRef<ViewerHandle, Props>(function AssemblyV
     const resize=new ResizeObserver(()=>{const w=element.clientWidth,h=element.clientHeight;if(w&&h){camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h);}});resize.observe(element);
     camera.aspect=element.clientWidth/Math.max(1,element.clientHeight);camera.updateProjectionMatrix();renderer.setSize(element.clientWidth,element.clientHeight);
     refresh(current.current);
-    renderer.setAnimationLoop(()=>{orbit.update();renderer.render(scene,camera);});
+    renderer.setAnimationLoop(()=>{if(orbit.enabled)orbit.update();renderer.render(scene,camera);});
     return()=>{
       renderer.setAnimationLoop(null);resize.disconnect();
       canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointerleave',leave);
