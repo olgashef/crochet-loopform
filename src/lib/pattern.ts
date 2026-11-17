@@ -1,3 +1,4 @@
+import { closesLastRound, type PieceEdge } from './pieceEdge';
 import { parseEyeDirective, validateEyePair, type SafetyEyePair } from "./safetyEyes";
 import type { PatternOrientation } from "./orientation";
 import { MAX_EMBROIDERY, parseEmbroideryDirective, validateEmbroidery, type EmbroiderySegment } from './embroidery';
@@ -40,6 +41,7 @@ export interface Diagnostic {
 }
 
 export interface ParsedPattern {
+  edge?: PieceEdge;
   orientation: PatternOrientation;
   eyes: SafetyEyePair[];
   embroidery: EmbroiderySegment[];
@@ -458,6 +460,12 @@ export function parsePattern(source: string): ParsedPattern {
     }
 
     try {
+      if (/^edge\b/i.test(line)) {
+        const match = /^edge:\s*(auto|open)$/i.exec(line);
+        if (!match) throw new PatternSyntaxError('Use edge: open to leave the final round open.');
+        parsed.edge = match[1].toLowerCase() as PieceEdge;
+        continue;
+      }
       const title = /^Pattern name:\s*"(.*)"$/i.exec(line);
       if (title) { parsed.name = title[1]; named = true; continue; }
       if (/^(?:start:\s*magic ring|fasten off)$/i.test(line)) continue;
@@ -694,7 +702,7 @@ export function parsePattern(source: string): ParsedPattern {
   }
   for (const round of parsed.rounds) round.color = round.stitches[0].color;
   for (const segment of parsed.embroidery) {
-    const message = validateEmbroidery(segment, parsed.rounds);
+    const message = validateEmbroidery(segment, parsed.rounds, closesLastRound(parsed.rounds.map(r=>r.outputCount),parsed.edge));
     if (message) parsed.diagnostics.push({ line: segment.line, severity: 'error', message });
   }
   for (const eyes of parsed.eyes) {

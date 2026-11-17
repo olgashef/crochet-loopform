@@ -1,3 +1,4 @@
+import { closesLastRound } from './pieceEdge';
 import type { ParsedPattern, Stitch, StitchType } from "./pattern";
 import { PREVIEW_STITCH_WIDTH } from './stitchScale';
 
@@ -26,6 +27,7 @@ export interface ModelLink {
 }
 
 export interface ModelGeometry {
+  endClosed?: boolean;
   points: ModelPoint[];
   links: ModelLink[];
   bounds: { width: number; height: number; depth: number };
@@ -84,7 +86,7 @@ export function buildGeometry(pattern: ParsedPattern): ModelGeometry {
   let previousHeight = 0;
   let courseY = 0;
 
-  const closed = pattern.rounds.length >= 7 && (pattern.rounds.at(-1)?.outputCount ?? 99) <= 8;
+  const closed = closesLastRound(pattern.rounds.map(r=>r.outputCount), pattern.edge);
   let profile = pattern.rounds.map(round => Math.max(0.22, round.stitches.length * STITCH_WIDTH / TAU));
   if (closed) {
     // A stuffed fabric shoulder curves across neighboring courses. Relax only
@@ -333,6 +335,7 @@ export function buildGeometry(pattern: ParsedPattern): ModelGeometry {
     if (pattern.orientation === "top-down") round.center[1] *= -1;
   }
   return {
+    endClosed: closed,
     points,
     links,
     bounds: {

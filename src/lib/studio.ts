@@ -1,8 +1,9 @@
+import type { ProjectSettings } from './projectLibrary';
 import { validPlacement, type PiecePlacement } from './assembly';
 import { EXAMPLES } from './pattern';
 import { sanitizeRowOffsets, type RowOffsets } from './rowOffsets';
 export interface Piece { id: string; name: string; source: string; rowOffsets: RowOffsets; placement?: PiecePlacement; hidden?: boolean }
-export interface Project { version: 2; name: string; pieces: Piece[]; activeId: string }
+export interface Project { id?: string; settings?: ProjectSettings; version: 2; name: string; pieces: Piece[]; activeId: string }
 export const STARTER = `Pattern name: "Honey bear"
 start: magic ring
 orientation top-down
@@ -82,6 +83,7 @@ export function initialProject(): Project {
 export function validProject(value: unknown): value is Project {
   if (!isRecord(value) || value.version !== 2 || typeof value.name !== 'string' || typeof value.activeId !== 'string'
     || !Array.isArray(value.pieces) || value.pieces.length < 1 || value.pieces.length > 30) return false;
+  if (value.id !== undefined && (typeof value.id !== 'string' || !value.id || value.id.length > 100)) return false;
   const ids = new Set<string>();
   for (const piece of value.pieces) {
     if (!isRecord(piece) || typeof piece.id !== 'string' || !piece.id || ids.has(piece.id)

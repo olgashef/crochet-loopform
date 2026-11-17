@@ -18,7 +18,7 @@ export function embroiderySurface(model: ModelGeometry) {
   })).filter(r => r.points.length);
   const first = rings[0], last = rings.at(-1);
   const minimum = first?.points.length <= 8 ? 0 : 1;
-  const maximum = last ? last.round + (last.points.length <= 8 ? 1 : 0) : 0;
+  const maximum = last ? last.round + (model.endClosed !== false && last.points.length <= 8 ? 1 : 0) : 0;
   function ringSample(index: number, angle: number) {
     const ring = rings[index];
     if (!ring) return null;

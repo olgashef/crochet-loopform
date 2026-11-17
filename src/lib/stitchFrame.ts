@@ -29,6 +29,18 @@ export function buildStitchFrames(
     roundCenters.set(point.round, center);
   }
   for (const center of roundCenters.values()) center.sum.divideScalar(center.count);
+  const courses = new Map<number, { radius: number; height: number; points: ModelPoint[] }>();
+  for (const point of points) {
+    if (point.branch) continue;
+    const course = courses.get(point.round) ?? {radius:0,height:roundCenters.get(point.round)!.sum.y,points:[]};
+    course.points.push(point);
+    courses.set(point.round,course);
+  }
+  for (const [round,course] of courses) {
+    const center=roundCenters.get(round)!.sum;
+    course.radius=course.points.reduce((sum,p)=>sum+Math.hypot(p.position[0]-center.x,p.position[2]-center.z),0)/course.points.length;
+    course.points.sort((a,b)=>a.index-b.index);
+  }
   for (const point of points) {
     const parents = point.parents
       .map((id) => byId.get(id))
@@ -47,13 +59,29 @@ export function buildStitchFrames(
       if (axis.lengthSq() < 1e-12) axis.copy(up);
       else axis.normalize();
     }
+    const course = courses.get(point.round);
+    const lower = courses.get(point.round - 1), upper = courses.get(point.round + 1);
+    let courseSpan = 0;
+    // Short SC courses follow the fabric meridian. Parent-to-child chords on
+    // small rings point through the cone and make rows stick out like shingles.
+    if (placePosts && !point.branch && ['sc','dec'].includes(point.type) && course && (parents.length || point.round===1)) {
+      const from=lower ?? course, to=upper ?? course;
+      const dy=to.height-from.height, dr=to.radius-from.radius;
+      if (Math.hypot(dy,dr)>1e-8) {
+        const center=roundCenters.get(point.round)!.sum;
+        axis.set(point.position[0]-center.x,0,point.position[2]-center.z).normalize().multiplyScalar(dr);
+        axis.y=dy;
+        axis.normalize();
+        courseSpan=Math.hypot(dy,dr)/(lower&&upper?2:1);
+      }
+    }
     const rotation = new Quaternion().setFromUnitVectors(up, axis);
     if (placePosts && !point.branch) {
       const outward = new Vector3().fromArray(point.position).sub(roundCenters.get(point.round)?.sum ?? new Vector3());
       outward.y = 0;
       if (outward.lengthSq() > 1e-8) {
         outward.normalize();
-        if (!parents.length && point.round === 1) axis.copy(outward);
+        if (!parents.length && point.round === 1 && !courseSpan) axis.copy(outward);
         // Preserve the exact parent axis; project the surface normal onto its
         // perpendicular plane so tall posts still meet their parent stitches.
         const normal = outward.clone().addScaledVector(axis, -outward.dot(axis));
@@ -71,6 +99,16 @@ export function buildStitchFrames(
     const scale = new Vector3().fromArray(
       getStitchAppearance(point.type).scale,
     );
+    if (placePosts && courseSpan && course && ['sc','dec'].includes(point.type)) {
+      const i=course.points.findIndex(p=>p.id===point.id), n=course.points.length;
+      const position=new Vector3().fromArray(point.position);
+      const spacing=(position.distanceTo(new Vector3().fromArray(course.points[(i+n-1)%n].position))
+        + position.distanceTo(new Vector3().fromArray(course.points[(i+1)%n].position)))/2;
+      // Size the loop envelope to the actual gauge, so adjoining rows meet at
+      // every display yarn thickness without changing topology or the opening.
+      scale.x=Math.max(.55,Math.min(1.6,spacing/(3.98*radius)));
+      scale.y=Math.max(.55,Math.min(2,courseSpan*1.14/(4.22*radius)));
+    }
     const position = new Vector3().fromArray(point.position);
     if (placePosts && point.type === "bobble") {
       const center = roundCenters.get(point.round)?.sum;

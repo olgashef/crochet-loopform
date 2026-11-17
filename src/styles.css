@@ -1664,3 +1664,20 @@ input[type=range] {
 .embroidery-list>div>button { margin-left:auto; }
 .embroidery-list i { width:14px; height:14px; border-radius:50%; border:1px solid var(--border); }
 @media(max-width:1150px) { .view-mode button[aria-label="Embroider"] span { display:none; } }
+
+.project-library { width: min(840px, calc(100vw - 32px)); max-height: 88vh; overflow: auto; }
+.project-library-actions, .library-project-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.project-library button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.project-library-actions button, .library-project-buttons button { border: 1px solid var(--border, #e5dfe9); border-radius: 9px; padding: 9px 12px; }
+.project-library-search { display: flex; align-items: center; gap: 10px; margin: 20px 0; padding: 10px 13px; background: #f6f3f8; border-radius: 10px; }
+.project-library-search input { width: 100%; background: transparent; border: 0; outline: none; }
+.project-library-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.library-project { padding: 18px; border: 1px solid #e5dfe9; border-radius: 13px; background: #fff; min-width: 0; }
+.library-project-heading { display: flex; align-items: center; gap: 10px; }
+.library-project-heading h3 { margin: 0; overflow-wrap: anywhere; flex: 1; }
+.library-project-heading small { color: #8c719c; background: #f2eaf6; padding: 4px 7px; border-radius: 6px; }
+.library-project p { overflow-wrap: anywhere; font-size: 12px; }
+.library-project time { display: block; color: #92899a; font-size: 11px; margin: 12px 0 18px; }
+.library-project-buttons { align-items: center; }
+.library-empty { padding: 28px; text-align: center; color: #95849f; }
+.library-error { color: #af4838; }

@@ -40,10 +40,10 @@ export function parseEmbroideryDirective(text: string, line: number): Embroidery
     throw new Error('Choose two different points for an embroidery line.');
   return segment;
 }
-export function validateEmbroidery(segment: EmbroiderySegment, rounds: PatternRound[]) {
+export function validateEmbroidery(segment: EmbroiderySegment, rounds: PatternRound[], endClosed = true) {
   const last = rounds.at(-1);
   for (const point of [segment.from, segment.to]) {
-    if (!last || point.round > last.number + 1 || (point.round < 1 && rounds[0].stitches.length > 8) || (point.round > last.number && last.stitches.length > 8))
+    if (!last || point.round > last.number + 1 || (point.round < 1 && rounds[0].stitches.length > 8) || (point.round > last.number && (!endClosed || last.stitches.length > 8)))
       return 'Embroidery references a missing round or an open end. Move its points or restore the rounds.';
   }
   return null;

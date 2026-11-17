@@ -64,7 +64,7 @@ const crochetLanguage = StreamLanguage.define({
       return "keyword";
     if (
       stream.match(/[×*]/) ||
-      stream.match(/(?:rep|repeat|times|in|for|rounds?|rnds?|x|same|st|branch|eyes|between|and|at|size|embroider|embroidery|dk|bulky)\b/i)
+      stream.match(/(?:rep|repeat|times|in|for|rounds?|rnds?|x|same|st|branch|eyes|between|and|at|size|embroider|embroidery|dk|bulky|edge|open|auto)\b/i)
     )
       return "operator";
     if (stream.match(/(?:mc|mr)\b/i)) return "typeName";

@@ -34,6 +34,18 @@ export function createFabricGeometry(
       return { angle: angleOf(x, z), radius: Math.hypot(x, z), point };
     }).sort((a, b) => a.angle - b.angle) }];
   });
+  const complete = rings.length === model.roundCenters.length;
+  // The anchor lies through the loop, not at its outer edge. Carry the thin
+  // fabric to the exposed loop edge so an open rim has no dangling half-row.
+  // Keep the zero-inset picking/projection surface on the original anchors.
+  if (inset > 0 && model.endClosed === false && rings.length > 1) {
+    const last = rings.at(-1)!, previous = rings.at(-2)!;
+    const radius = (ring: Ring) => ring.points.reduce((n,p)=>n+p.radius,0)/ring.points.length;
+    const dr=(radius(last)-radius(previous))*.32, dy=(last.center.y-previous.center.y)*.32;
+    rings.push({center:last.center.clone().add(new Vector3(0,dy,0)), points:last.points.map(p=>({
+      ...p, radius:Math.max(.02,p.radius+dr), point:{...p.point,position:[p.point.position[0],p.point.position[1]+dy,p.point.position[2]]},
+    }))});
+  }
   const positions: number[] = [];
   const colors: number[] = [];
   const stitchIds: number[] = [];
@@ -108,7 +120,7 @@ export function createFabricGeometry(
     }
   }
   cap(0);
-  if (rings.length > 1) cap(rings.length - 1);
+  if (rings.length > 1 && model.endClosed !== false && complete) cap(rings.length - 1);
   const geometry = new BufferGeometry();
   geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
   geometry.setAttribute('color', new Float32BufferAttribute(colors, 3));
