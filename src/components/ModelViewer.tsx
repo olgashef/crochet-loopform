@@ -1,3 +1,4 @@
+import {setStitchMorph,CLUSTER_TYPES,StitchInstancedMesh} from '../lib/stitchMorph';
 import {
   forwardRef,
   useEffect,
@@ -24,6 +25,7 @@ import { offsetRows, type RowOffsets } from "../lib/rowOffsets";
 import { THREADS, type EmbroideryAnchor, type EmbroiderySegment, type ThreadWeight } from '../lib/embroidery';
 import { embroiderySurface } from '../lib/embroiderySurface';
 import { createEmbroideryMesh } from '../lib/embroideryMesh';
+import { createRoundHighlight } from '../lib/roundHighlight';
 import { EmbroideryPointer } from '../lib/embroideryPointer';
 
 export interface ViewerHandle {
@@ -56,6 +58,7 @@ export interface ViewerProps {
   mode: "stitches" | "structure";
   selectedStitch: number | null;
   selectedStitches?: number[];
+  highlightedRounds?: readonly number[];
   onSelect: (id: number | null) => void;
   paintTool?: PaintTool;
   brushColor?: string;
@@ -89,6 +92,7 @@ interface ViewerRuntime {
   fabricVertices: Map<number,number[]>;
   embroidery: THREE.Group;
   embroideryDraft: THREE.Group;
+  roundHighlight: THREE.Group;
   embroideryPointer: EmbroideryPointer | null;
 }
 
@@ -100,6 +104,7 @@ interface HoveredPoint {
   color: string;
   patternColor?: string;
   paintSourceLine?: number;
+  auxiliary?: 'foundation' | 'turning';
   x: number;
   y: number;
 }
@@ -164,6 +169,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       mode,
       selectedStitch,
       selectedStitches = [],
+      highlightedRounds = [],
       onSelect,
       paintTool = "inspect", brushColor = "#f3e8d6", canPaint = true, onBrush, onSample,
       rowOffsets,
@@ -210,6 +216,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
           model?.points ?? [],
           (mode === "structure" ? 0.062 : 0.25) * thickness,
           mode === "stitches",
+          model?.roundCenters,
         ),
       [model, mode, thickness],
     );
@@ -268,6 +275,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
           if (!current) return;
           const previousBackground = current.scene.background;
           const previousMarker = current.marker.visible;
+          current.roundHighlight.visible = false;
           const anchor = current.embroidery.getObjectByName('embroidery-anchor');
           const previousAnchor = anchor?.visible;
           current.embroideryDraft.visible = false;
@@ -282,6 +290,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
           download.click();
           current.scene.background = previousBackground;
           current.marker.visible = previousMarker;
+          current.roundHighlight.visible = true;
           current.embroideryDraft.visible = true;
           if (anchor) anchor.visible = previousAnchor!;
           current.rows.setHidden(false);
@@ -347,6 +356,8 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       scene.add(group);
       const embroideryGroup = new THREE.Group(), embroideryDraft = new THREE.Group();
       scene.add(embroideryGroup, embroideryDraft);
+      const roundHighlight = new THREE.Group();
+      scene.add(roundHighlight);
       const marker = new THREE.Mesh(
         new THREE.RingGeometry(0.31, 0.35, 48),
         new THREE.MeshBasicMaterial({
@@ -402,7 +413,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         controls.target.copy(frame.target);
         camera.position
           .copy(frame.target)
-          .addScaledVector(direction, frame.distance * (modelRef.current?.points.some(p => p.branch) ? 0.84 : 0.69));
+          .addScaledVector(direction, frame.distance * ((modelRef.current?.construction==='rows'||modelRef.current?.planarFoundation) ? 1 : modelRef.current?.points.some(p => p.branch) ? 0.84 : 0.69));
         controls.maxDistance = Math.max(800, frame.distance * 4);
         camera.near = Math.max(frame.distance / 1000, 0.01);
         camera.far = Math.max(frame.distance * 100, 1000);
@@ -428,6 +439,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         rows: null! as RowManipulator,
         brush: null, previewColors:new Map(), stitchInstances:new Map(), bobbleInstances:new Map(), fabricVertices:new Map(),
         embroidery: embroideryGroup, embroideryDraft, embroideryPointer: null,
+        roundHighlight,
       };
       current.rows = new RowManipulator(
         scene,
@@ -609,6 +621,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
           color: point.color,
           patternColor: point.patternColor,
           paintSourceLine: point.paintSourceLine,
+          auxiliary: point.auxiliary?.kind,
           x: Math.max(
             8,
             Math.min(event.clientX - rect.left + 14, rect.width - 210),
@@ -677,6 +690,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         disposeGroup(group);
         disposeGroup(embroideryGroup);
         disposeGroup(embroideryDraft);
+        disposeGroup(roundHighlight);
         marker.geometry.dispose();
         (marker.material as THREE.Material).dispose();
         renderer.dispose();
@@ -732,7 +746,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         roughness: 0.94,
         metalness: 0,
       });
-      const nodes = new THREE.InstancedMesh(
+      const nodes = new StitchInstancedMesh(
         sphere,
         nodeMaterial,
         active.length,
@@ -740,10 +754,11 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       const transform = new THREE.Object3D();
       const color = new THREE.Color();
       active.forEach((point, index) => {
+        if(mode === "stitches")setStitchMorph(nodes,index,point.countedChain?point.countedChain-1:undefined);
         const frame = frames.get(point.id)!;
         transform.position.copy(frame.position);
         transform.scale.copy(frame.scale);
-        if (point.type === "bobble" && mode === "stitches") transform.scale.multiplyScalar(0.5);
+        if (['bobble','bobble2','bobble3','bobble4','trbo','puff','popcorn'].includes(point.type) && mode === "stitches") transform.scale.multiplyScalar(0.5);
         transform.quaternion.copy(frame.rotation);
         transform.updateMatrix();
         nodes.setMatrixAt(index, transform.matrix);
@@ -756,14 +771,15 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       current.group.add(nodes);
 
       if (mode === "stitches") {
-        const bobblePoints = active.filter((point) => point.type === "bobble");
+        const bobblePoints = active.filter((point) => ['bobble','bobble2','bobble3','bobble4','trbo','puff','popcorn'].includes(point.type));
         if (bobblePoints.length) {
-          const bobbles = new THREE.InstancedMesh(
+          const bobbles = new StitchInstancedMesh(
             createBobbleGeometry(nodeRadius),
             nodeMaterial,
             bobblePoints.length,
           );
           bobblePoints.forEach((point, index) => {
+            setStitchMorph(bobbles,index,CLUSTER_TYPES.indexOf(point.type));
             const frame = frames.get(point.id)!;
             transform.position.copy(frame.position);
             transform.scale.copy(frame.scale);
@@ -806,7 +822,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       }
       current.renderer.domElement.setAttribute(
         "aria-label",
-        `Interactive crochet model. ${active.filter((p) => p.type === "bobble").length} bobble stitches, ${active.filter((p) => p.branch).length} branch stitches, ${visibleEyes.length} safety eyes. Drag to rotate, scroll to zoom, or click a stitch to inspect it.`,
+        `Interactive crochet model. ${active.filter((p) => ['bobble','bobble2','bobble3','bobble4','trbo','puff','popcorn'].includes(p.type)).length} bobble stitches, ${active.filter((p) => p.branch).length} branch stitches, ${visibleEyes.length} safety eyes. Drag to rotate, scroll to zoom, or click a stitch to inspect it.`,
       );
 
       const links = (mode === "structure" ? model.links : []).filter(
@@ -823,7 +839,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
         roughness: 0.8,
         metalness: 0,
       });
-      const edges = new THREE.InstancedMesh(
+      const edges = new StitchInstancedMesh(
         cylinder,
         edgeMaterial,
         links.length,
@@ -869,11 +885,23 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
       );
       if (shadow) current.group.add(shadow);
 
-      if (!lastModel.current || lastModel.current.points.length !== baseModel?.points.length) {
+      if (!lastModel.current || lastModel.current.construction !== baseModel?.construction || lastModel.current.points.length !== baseModel?.points.length) {
         current.reset();
         lastModel.current = baseModel;
       }
     }, [model, baseModel, frames, eyePlacements, visibleRounds, thickness, mode]);
+
+    useEffect(() => {
+      const current = runtime.current;
+      if (!current) return;
+      disposeGroup(current.roundHighlight); current.roundHighlight.clear();
+      const visible = highlightedRounds.filter(round => round <= visibleRounds);
+      current.roundHighlight.add(createRoundHighlight(visible, [
+        {mesh: current.nodes, points: current.activePoints},
+        {mesh: current.bobbles, points: current.bobblePoints},
+      ]));
+      current.renderer.domElement.setAttribute('aria-description', visible.length ? `Highlighted rounds: ${visible.join(', ')}` : 'No round highlighted');
+    }, [highlightedRounds, model, visibleRounds, thickness, mode, frames]);
 
     useEffect(() => {
       const current = runtime.current;
@@ -965,7 +993,7 @@ export const ModelViewer = forwardRef<ViewerHandle, ViewerProps>(
             style={{ left: hover.x, top: hover.y }}
           >
             <strong>
-              Round {hover.round} <span>·</span> Stitch {hover.index + 1}
+              {hover.auxiliary==='foundation'?'Foundation':`${model?.construction==='rows'?'Row':'Round'} ${hover.round}`} <span>·</span> {hover.auxiliary==='turning'?'Turning chain':'Stitch'} {hover.index + 1}
             </strong>
             <span>
               {getStitchAppearance(hover.type).label} ·{" "}

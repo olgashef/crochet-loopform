@@ -2,6 +2,7 @@ import type { ModelGeometry, ModelPoint, Position } from "./geometry";
 import { Vector3 } from 'three';
 import type { PatternRound } from "./pattern";
 import { DEFAULT_STITCH_WIDTH_MM, PREVIEW_STITCH_WIDTH } from './stitchScale';
+import { flatSurface } from './flatGeometry';
 
 export interface SafetyEyePair {
   lowerRound: number;
@@ -126,11 +127,24 @@ export function buildSafetyEyes(
     const upperCenter = model.roundCenters.find((round) => round.round === pair.upperRound)?.center;
     if (!lowerCenter || !upperCenter) continue;
     const bodyPoints = (round: number) => model.points
-      .filter((point) => point.round === round && !("branch" in point && point.branch))
+      .filter((point) => point.round === round && !point.branch && !point.auxiliary)
       .sort((a, b) => a.index - b.index);
     const lower = bodyPoints(pair.lowerRound);
     const upper = bodyPoints(pair.upperRound);
     if (!lower.length || !upper.length || validateEyeSize(pair)) continue;
+    if(model.construction==='rows') {
+      const surface=flatSurface(model);
+      const first=Math.min(...lower.map(p=>p.position[0]))-.9*.48,last=Math.max(...lower.map(p=>p.position[0]))+.9*.48;
+      for(const [eyeIndex,stitch] of pair.stitches.entries()) {
+        const left=lower[stitch-1];if(!left)continue;
+        const right=lower[Math.min(stitch,lower.length-1)];
+        const x=(left.position[0]+right.position[0])/2;
+        const sample=surface.sample((pair.lowerRound+pair.upperRound)/2,(x-first)/(last-first));if(!sample)continue;
+        sample.position.z=.24+pair.size*.18;
+        placements.push({id:`eyes-${pair.line}-${pairIndex}-${eyeIndex}`,position:sample.position.toArray(),normal:[0,0,1],size:pair.size,lowerRound:pair.lowerRound,upperRound:pair.upperRound,stitch});
+      }
+      continue;
+    }
     const sampleLower = surfaceRing(lower, lowerCenter);
     const sampleUpper = surfaceRing(upper, upperCenter);
     for (const [eyeIndex, stitch] of pair.stitches.entries()) {
@@ -138,7 +152,8 @@ export function buildSafetyEyes(
       const left = lower[stitch - 1];
       const right = lower[stitch % lower.length];
       const startAngle = angle(left, lowerCenter);
-      const gap = (angle(right, lowerCenter) - startAngle + TAU) % TAU;
+      const delta = angle(right, lowerCenter) - startAngle;
+      const gap = Math.atan2(Math.sin(delta), Math.cos(delta));
       const eyeAngle = startAngle + gap / 2;
       // Sample both courses at the same angle, including across the seam.
       // Their two surface tangents give the eye's outward axis even on domes,

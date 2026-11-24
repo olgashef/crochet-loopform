@@ -1,3 +1,4 @@
+import { insertWorksheetRow } from '../lib/worksheet';
 import { completeRoundCount } from "../lib/completeRoundCount";
 import { useEffect, useRef } from "react";
 import {
@@ -41,6 +42,7 @@ export interface PatternEditorProps {
   diagnostics: Diagnostic[];
   onRender: () => void;
   selectedLine: number | null;
+  onActiveLineChange: (line: number | null) => void;
 }
 
 const crochetLanguage = StreamLanguage.define({
@@ -61,11 +63,11 @@ const crochetLanguage = StreamLanguage.define({
       stream.pos += color[0].length;
       return "string";
     }
-    if (stream.match(/(?:sc|hdc|dc|tr|ch|inc|dec|slst|ss|bobble|bbl)\b/i))
+    if (stream.match(/(?:sc|hdc|dc|tr|dtr|ch|inc3?|dec3?|sk|slst|sl|ss|bobble[234]?|bbl|trbo|puff|popcorn|shell)\b/i))
       return "keyword";
     if (
       stream.match(/[×*]/) ||
-      stream.match(/(?:rep|repeat|times|in|for|rounds?|rnds?|x|same|st|branch|eyes|between|and|at|size|embroider|embroidery|dk|bulky|edge|open|auto)\b/i)
+      stream.match(/(?:BLO|FLO|of|back|join|counts|as|hook|one|rep|repeat|times|in|for|rows?|rounds?|rnds?|turn|across|x|same|st|branch|eyes|between|and|at|size|embroider|embroidery|dk|bulky|edge|open|auto)\b/i)
     )
       return "operator";
     if (stream.match(/(?:mc|mr)\b/i)) return "typeName";
@@ -80,16 +82,16 @@ const crochetLanguage = StreamLanguage.define({
 });
 
 const crochetHighlight = HighlightStyle.define([
-  { tag: tags.heading, color: "#9b9a94", fontStyle: "italic" },
-  { tag: tags.comment, color: "#a2a29b", fontStyle: "italic" },
-  { tag: tags.keyword, color: "#4d7d70", fontWeight: "500" },
-  { tag: tags.operator, color: "#9a6d8d" },
-  { tag: tags.typeName, color: "#a77643" },
-  { tag: tags.number, color: "#b26d48" },
-  { tag: tags.string, color: "#bd6554", fontWeight: "500" },
-  { tag: tags.punctuation, color: "#93948d" },
-  { tag: tags.bracket, color: "#858b82" },
-  { tag: tags.variableName, color: "#616960" },
+  { tag: tags.heading, color: "var(--ui-muted, #9b9a94)", fontStyle: "italic" },
+  { tag: tags.comment, color: "var(--ui-muted, #a2a29b)", fontStyle: "italic" },
+  { tag: tags.keyword, color: "var(--ui-green, #4d7d70)", fontWeight: "500" },
+  { tag: tags.operator, color: "var(--ui-accent, #9a6d8d)" },
+  { tag: tags.typeName, color: "var(--ui-warm, #a77643)" },
+  { tag: tags.number, color: "var(--ui-warm, #b26d48)" },
+  { tag: tags.string, color: "var(--ui-warm, #bd6554)", fontWeight: "500" },
+  { tag: tags.punctuation, color: "var(--ui-muted, #93948d)" },
+  { tag: tags.bracket, color: "var(--ui-muted, #858b82)" },
+  { tag: tags.variableName, color: "var(--ui-ink, #616960)" },
 ]);
 
 // Exact yarn swatches remain editable text, including model-generated paint entries.
@@ -177,15 +179,18 @@ export function PatternEditor({
   diagnostics,
   onRender,
   selectedLine,
+  onActiveLineChange,
 }: PatternEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   const onRenderRef = useRef(onRender);
+  const onActiveLineRef = useRef(onActiveLineChange);
   const initialValue = useRef(value);
 
   onChangeRef.current = onChange;
   onRenderRef.current = onRender;
+  onActiveLineRef.current = onActiveLineChange;
 
   useEffect(() => {
     if (!host.current) return;
@@ -232,6 +237,18 @@ export function PatternEditor({
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !update.transactions.some(t => t.annotation(externalSync)))
               onChangeRef.current(update.state.doc.toString());
+            if (update.selectionSet || update.docChanged || update.focusChanged && update.view.hasFocus)
+              onActiveLineRef.current(update.state.doc.lineAt(update.state.selection.main.head).number);
+          }),
+          EditorView.domEventHandlers({
+            mousemove(event, view) {
+              if (event.buttons || !view.contentDOM.contains(event.target as Node)) return;
+              const position = view.posAtCoords({x: event.clientX, y: event.clientY});
+              onActiveLineRef.current(position === null ? null : view.state.doc.lineAt(position).number);
+            },
+            mouseleave(_event, view) {
+              onActiveLineRef.current(view.state.doc.lineAt(view.state.selection.main.head).number);
+            },
           }),
         ],
       }),
@@ -239,11 +256,17 @@ export function PatternEditor({
 
     const insert = (event: Event) => {
       const text = (event as CustomEvent<string>).detail;
-      view.dispatch(view.state.replaceSelection(text));
+      if(text==='new-row') {
+        const line=view.state.doc.lineAt(view.state.selection.main.head).number;
+        const next=insertWorksheetRow(view.state.doc.toString(),line);
+        const end=next.split('\n').slice(0,line+1).join('\n').length;
+        view.dispatch({changes:{from:0,to:view.state.doc.length,insert:next},selection:{anchor:end},scrollIntoView:true,userEvent:'input'});
+      } else view.dispatch(view.state.replaceSelection(text));
       view.focus();
     };
     window.addEventListener("loopform:insert", insert);
     editor.current = view;
+    onActiveLineRef.current(view.state.doc.lineAt(view.state.selection.main.head).number);
     return () => {
       window.removeEventListener("loopform:insert", insert);
       editor.current = null;

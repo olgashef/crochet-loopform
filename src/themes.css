@@ -1,0 +1,42 @@
+/* Neutral uses the original component fallbacks. Yarn colors are independent. */
+:root[data-theme="neutral"] { color-scheme: light; }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ui-page:#19181e; --ui-paper:#24232b; --ui-soft:#2d2b36;
+  --ui-selected:#44394f; --ui-border:#514a5c; --ui-ink:#eee9f2;
+  --ui-muted:#b9b0c3; --ui-accent:#d1ace5; --ui-accent-fill:#79588e;
+  --ui-green:#a6ccb5; --ui-warm:#edb697;
+}
+:root[data-theme="sage"] {
+  color-scheme: light;
+  --ui-page:#edf1e9; --ui-paper:#fcfdf9; --ui-soft:#eaf0e5;
+  --ui-selected:#d6e3cf; --ui-border:#c4d1bc; --ui-ink:#303e32;
+  --ui-muted:#637460; --ui-accent:#4d704c; --ui-accent-fill:#547650;
+  --ui-green:#38705a; --ui-warm:#995a36;
+}
+:root[data-theme="ocean"] {
+  color-scheme: light;
+  --ui-page:#edf3f7; --ui-paper:#fbfdff; --ui-soft:#e7f0f7;
+  --ui-selected:#d0e3f0; --ui-border:#bfd1de; --ui-ink:#293e50;
+  --ui-muted:#60778b; --ui-accent:#376b94; --ui-accent-fill:#3c7098;
+  --ui-green:#287466; --ui-warm:#a05a37;
+}
+:root[data-theme="rose"] {
+  color-scheme: light;
+  --ui-page:#f6eeed; --ui-paper:#fffcfa; --ui-soft:#f7e9e7;
+  --ui-selected:#eed5d3; --ui-border:#dfc7c5; --ui-ink:#50383d;
+  --ui-muted:#89696f; --ui-accent:#995461; --ui-accent-fill:#9b5966;
+  --ui-green:#52745c; --ui-warm:#a15b37;
+}
+:root[data-theme]:not([data-theme="neutral"]) {
+  --ink:var(--ui-ink); --muted:var(--ui-muted); --border:var(--ui-border);
+  --paper:var(--ui-paper); --green:var(--ui-green); --line:var(--ui-border);
+  color:var(--ui-ink); background:var(--ui-page);
+}
+.theme-picker { display:flex; align-items:center; gap:6px; color:var(--ui-accent,#94739f); }
+.theme-picker select { font-size:11px; padding:5px 6px; max-width:100px; }
+@media(max-width:720px) {
+  .header-end { gap:8px; }
+  .theme-picker { gap:2px; }
+  .theme-picker select { max-width:80px; }
+}

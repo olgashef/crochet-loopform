@@ -225,7 +225,7 @@ export class RowManipulator {
       this.selection.visible &&
       this.ray.intersectObject(this.arrowHit, false).length > 0;
     const row = arrowHit ? this.row : this.hitRow();
-    if (row === null) return;
+    if (row === null || row < 1) return;
     const normal = this.camera.getWorldDirection(new THREE.Vector3());
     normal.y = 0;
     if (normal.lengthSq() < 1e-8) normal.set(0, 0, 1);

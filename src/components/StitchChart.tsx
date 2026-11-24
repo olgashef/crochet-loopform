@@ -25,9 +25,11 @@ export function StitchChart(props:Props){
     return()=>{brush.current?.dispose();brush.current=null;};
   },[]);
   useEffect(()=>brush.current?.cancelStroke(),[props.pattern,props.visibleRounds,props.tool,props.color,props.canPaint]);
+  const flat=props.pattern.construction==='rows';
+  const label=flat?'Row':'Round';
   return <div ref={root} className={`stitch-chart ${props.tool!=='inspect'?'chart-painting':''}`} aria-label="Stitch chart canvas">
-    <p>{props.tool==='brush'?'Drag across cells to paint whole stitches.':props.tool==='sample'?'Click a cell to copy its exact yarn color.':'Click a stitch to select it. Each row is one round.'}</p>
-    {props.pattern.rounds.slice(0,props.visibleRounds).slice().reverse().map(r=><div className="chart-row" key={r.number}><span>{r.number}</span>{r.stitches.map(s=><button key={s.id} data-stitch-id={s.id} className={props.selection.includes(s.id)?'selected':''} style={{background:s.color}} title={`Round ${s.round}, stitch ${s.index+1}: ${s.type} · ${s.color.toUpperCase()}${s.patternColor ? ` · Painted; pattern ${s.patternColor.toUpperCase()} · paint line ${s.paintSourceLine}` : ''}`} aria-label={`Round ${s.round}, stitch ${s.index+1}`} onClick={event=>{
+    <p>{props.tool==='brush'?'Drag across cells to paint whole stitches.':props.tool==='sample'?'Click a cell to copy its exact yarn color.':flat?'Click a stitch to select it. Rows alternate direction.':'Click a stitch to select it. Each row is one round.'}</p>
+    {props.pattern.rounds.slice(0,props.visibleRounds).slice().reverse().map(r=><div className="chart-row" key={r.number}><span>{r.number}</span>{(flat&&r.number%2===0?r.stitches:r.stitches.slice().reverse()).map(s=><button key={s.id} data-stitch-id={s.id} className={props.selection.includes(s.id)?'selected':''} style={{background:s.color}} title={`${label} ${s.round}, stitch ${s.index+1}: ${s.type} · ${s.color.toUpperCase()}${s.patternColor ? ` · Painted; pattern ${s.patternColor.toUpperCase()} · paint line ${s.paintSourceLine}` : ''}`} aria-label={`${label} ${s.round}, stitch ${s.index+1}`} onClick={event=>{
       if(props.tool==='inspect')props.onSelect(s.id);
       else if(event.detail===0){if(props.tool==='sample')props.onSample(s.color);else if(props.canPaint)props.onBrush([s.id],props.color);}
     }}>{s.isIncrease?'∨':s.type==='dec'?'∧':'×'}</button>)}<small>{r.outputCount}</small></div>)}

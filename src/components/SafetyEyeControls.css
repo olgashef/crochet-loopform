@@ -1,9 +1,9 @@
 .safety-eye-controls {
-  border-top: 1px solid #e3e8dc;
-  background: #f8faf5;
+  border-top: 1px solid var(--ui-border, #e3e8dc);
+  background: var(--ui-soft, #f8faf5);
   padding: 10px 16px;
   font-size: 11px;
-  color: #50674e;
+  color: var(--ui-green, #50674e);
   max-height: 250px;
   overflow: auto;
 }
@@ -12,6 +12,6 @@
 .safety-eye-controls p { line-height: 1.5; margin: 9px 0; }
 .eye-fields, .eye-actions, .eye-pair { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
 .eye-fields label { display: flex; flex-direction: column; gap: 4px; }
-.eye-fields input { width: 70px; padding: 5px; border: 1px solid #cdd7c5; border-radius: 4px; background: white; color: #30482d; }
-.safety-eye-controls button { padding: 4px 8px; border: 1px solid #ced9c5; border-radius: 4px; background: white; }
-.eye-actions button:first-child { color: #315d4c; }
+.eye-fields input { width: 70px; padding: 5px; border: 1px solid var(--ui-border, #cdd7c5); border-radius: 4px; background:var(--ui-paper, white); color: var(--ui-green, #30482d); }
+.safety-eye-controls button { padding: 4px 8px; border: 1px solid var(--ui-border, #ced9c5); border-radius: 4px; background:var(--ui-paper, white); }
+.eye-actions button:first-child { color: var(--ui-green, #315d4c); }

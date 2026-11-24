@@ -13,6 +13,7 @@ export function initialModelView(
 ): Vector3 {
   const fallback = new Vector3(0.95, 0.36, 1.55).normalize();
   if (!model) return fallback;
+  if (model.construction==='rows'||model.planarFoundation) return new Vector3(.12,.16,1).normalize();
   const points = new Map(model.points.map((point) => [point.id, point]));
   let longest = new Vector3();
   for (const point of model.points) {

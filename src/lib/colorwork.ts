@@ -5,15 +5,16 @@ export function colorSelection(pattern: ParsedPattern, id: number, scope: ColorS
   const seed = pattern.stitches.find(s => s.id === id);
   if (!seed) return [];
   if (scope === 'Whole piece') return pattern.stitches.map(s => s.id);
-  if (scope === 'Round') return pattern.rounds[seed.round - 1].stitches.map(s => s.id);
+  if (scope === 'Round') return pattern.stitches.filter(s=>s.round===seed.round&&!s.branch).map(s=>s.id);
   if (scope !== 'Patch') return [id];
   const adjacency = new Map<number, Set<number>>();
   const connect = (a: number, b: number) => { if (!adjacency.has(a)) adjacency.set(a, new Set()); adjacency.get(a)!.add(b); };
   for (const round of pattern.rounds) for (const s of round.stitches) {
-    const neighbors = [...s.parents, round.stitches[(s.index + 1) % round.stitches.length].id];
+    const next=pattern.construction==='rows'?round.stitches[s.index+1]:round.stitches[(s.index+1)%round.stitches.length];
+    const neighbors = [...s.parents, ...(next?[next.id]:[])];
     for (const n of neighbors) { connect(s.id, n); connect(n, s.id); }
   }
-  for (const s of pattern.stitches.filter(s => s.branch)) for (const n of s.parents) {connect(s.id,n);connect(n,s.id);}
+  for (const s of pattern.stitches.filter(s => s.branch||s.auxiliary)) for (const n of s.parents) {connect(s.id,n);connect(n,s.id);}
   const byId = new Map(pattern.stitches.map(s => [s.id, s]));
   const found = new Set([id]); const queue = [id];
   for (let i = 0; i < queue.length; i++) for (const n of adjacency.get(queue[i]) ?? []) {

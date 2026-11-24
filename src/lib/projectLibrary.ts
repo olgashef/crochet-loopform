@@ -11,10 +11,11 @@ export interface ProjectSettings {
   threadWeight: 'embroidery' | 'dk' | 'bulky';
   threadColor: string;
   libraryOpen: boolean;
+  highlightRounds: boolean;
 }
 export const DEFAULT_SETTINGS: ProjectSettings = {
   view: '3d', backdrop: 'dark', editorMode: 'code', mode: 'stitches', roundLimit: 150,
-  thickness: 1, color: '#f3e8d6', threadWeight: 'embroidery', threadColor: '#303431', libraryOpen: true,
+  thickness: 1, color: '#f3e8d6', threadWeight: 'embroidery', threadColor: '#303431', libraryOpen: true, highlightRounds: true,
 };
 export function projectSettings(value: unknown): ProjectSettings {
   const s = value && typeof value === 'object' ? value as Record<string, unknown> : {};
@@ -28,6 +29,7 @@ export function projectSettings(value: unknown): ProjectSettings {
     color: hex('color',DEFAULT_SETTINGS.color), threadColor: hex('threadColor',DEFAULT_SETTINGS.threadColor),
     threadWeight: pick('threadWeight',['embroidery','dk','bulky'],'embroidery'),
     libraryOpen: typeof s.libraryOpen === 'boolean' ? s.libraryOpen : true,
+    highlightRounds: typeof s.highlightRounds === 'boolean' ? s.highlightRounds : true,
   };
 }
 export interface LibraryEntry { id: string; project: Project; createdAt: number; updatedAt: number; archived: boolean }

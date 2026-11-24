@@ -15,7 +15,7 @@ test('small tapered ears follow the meridian, including their first course',()=>
     const model=buildGeometry(parsePattern(source));
     assert.equal(model.endClosed,false);assert.equal(model.points.length,46);
     for (const radius of [.175,.25,.35]) {
-      const frames=buildStitchFrames(model.points,radius);
+      const frames=buildStitchFrames(model.points,radius,true,model.roundCenters);
       for (const point of model.points) {
         const course=model.roundCenters[point.round-1];
         const low=model.roundCenters[Math.max(0,point.round-2)], high=model.roundCenters[Math.min(4,point.round)];
@@ -35,13 +35,13 @@ test('narrow unfinished tubes remain open even with fasten off and partial playb
   const source='Round 1: 6sc in mr\nRound 2-9: sc around\nfasten off';
   const model=buildGeometry(parsePattern(source));
   assert.equal(model.endClosed,false);
-  for (const visible of [5,9]) {
-    const geo=createFabricGeometry(model,visible), mat=new MeshBasicMaterial({side:DoubleSide}), mesh=new Mesh(geo,mat);
+  for (const visible of [5,9]) for(const inset of [0,.16]) {
+    const geo=createFabricGeometry(model,visible,inset), mat=new MeshBasicMaterial({side:DoubleSide}), mesh=new Mesh(geo,mat);
     mesh.updateMatrixWorld();
     const ray=new Raycaster(new Vector3(0,model.bounds.height+2,0),new Vector3(0,-1,0));
     const hits=ray.intersectObject(mesh);
     assert.ok(hits.length>0,'magic-ring foundation remains closed');
-    assert.ok(hits.every(hit=>Math.abs(hit.point.y-model.roundCenters[0].center[1])<1e-5),'no cap covers the opening or playback frontier');
+    assert.ok(hits.every(hit=>Math.abs(hit.point.y-model.roundCenters[0].center[1]-inset)<1e-5),'only the inset foundation cap is present; the opening and playback frontier remain open');
     geo.dispose();mat.dispose();
   }
   assert.equal(embroiderySurface(model).sample({round:9.5,angle:0}),null);

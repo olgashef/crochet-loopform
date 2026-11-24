@@ -1,3 +1,4 @@
+import {setStitchMorph,CLUSTER_TYPES,StitchInstancedMesh} from './stitchMorph';
 import * as THREE from 'three';
 import type { ModelGeometry } from './geometry';
 import type { ParsedPattern } from './pattern';
@@ -13,20 +14,23 @@ export function createPieceMesh(model: ModelGeometry, pattern: ParsedPattern, th
   const group = new THREE.Group();
   if (!model.points.length) return group;
   const material = new THREE.MeshStandardMaterial({roughness:.94,metalness:0});
-  const frames = buildStitchFrames(model.points,.25*thickness,true);
-  const nodes = new THREE.InstancedMesh(createYarnGeometry(.25*thickness),material,model.points.length);
+  const frames = buildStitchFrames(model.points,.25*thickness,true,model.roundCenters);
+  const nodes = new StitchInstancedMesh(createYarnGeometry(.25*thickness),material,model.points.length);
+  nodes.name = 'yarn-stitches';
   const transform = new THREE.Object3D(), color = new THREE.Color();
   model.points.forEach((p,i) => {
+    setStitchMorph(nodes,i,p.countedChain? p.countedChain-1:undefined);
     const f = frames.get(p.id)!;
     transform.position.copy(f.position); transform.quaternion.copy(f.rotation); transform.scale.copy(f.scale);
-    if(p.type==='bobble') transform.scale.multiplyScalar(.5);
+    if(['bobble','bobble2','bobble3','bobble4','trbo','puff','popcorn'].includes(p.type)) transform.scale.multiplyScalar(.5);
     transform.updateMatrix(); nodes.setMatrixAt(i,transform.matrix); nodes.setColorAt(i,color.set(p.color));
   });
   nodes.computeBoundingSphere(); group.add(nodes);
-  const bobbles = model.points.filter(p=>p.type==='bobble');
+  const bobbles = model.points.filter(p=>['bobble','bobble2','bobble3','bobble4','trbo','puff','popcorn'].includes(p.type));
   if(bobbles.length) {
-    const mesh = new THREE.InstancedMesh(createBobbleGeometry(.25*thickness),material,bobbles.length);
-    bobbles.forEach((p,i)=> {const f=frames.get(p.id)!;transform.position.copy(f.position);transform.quaternion.copy(f.rotation);transform.scale.copy(f.scale);transform.updateMatrix();mesh.setMatrixAt(i,transform.matrix);mesh.setColorAt(i,color.set(p.color));});
+    const mesh = new StitchInstancedMesh(createBobbleGeometry(.25*thickness),material,bobbles.length);
+    mesh.name = 'yarn-bobbles';
+    bobbles.forEach((p,i)=> {setStitchMorph(mesh,i,CLUSTER_TYPES.indexOf(p.type));const f=frames.get(p.id)!;transform.position.copy(f.position);transform.quaternion.copy(f.rotation);transform.scale.copy(f.scale);transform.updateMatrix();mesh.setMatrixAt(i,transform.matrix);mesh.setColorAt(i,color.set(p.color));});
     mesh.computeBoundingSphere();group.add(mesh);
   }
   group.add(new THREE.Mesh(createFabricGeometry(model,Infinity,.15),new THREE.MeshStandardMaterial({vertexColors:true,roughness:1,side:THREE.DoubleSide})));

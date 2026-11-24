@@ -1,4 +1,4 @@
-import { analyzeInstruction, readRoundLine, type Operation } from "./pattern";
+import { analyzeInstruction, readRoundLine, parsePattern, type Operation } from "./pattern";
 
 export function stripWrittenCount(text: string) {
   return text.replace(/\s*(?:\(\d+\)|→\s*\d+)\s*(?=\/\/|$)/, "");
@@ -7,14 +7,14 @@ export function worksheetInstruction(line: string) {
   const row = readRoundLine(line);
   if (!row) return "";
   const body = stripWrittenCount(row.instruction);
-  if (row.end !== null && !/\bfor\s+\d+\s+(?:rounds?|rnds?)\b/i.test(body)) {
+  if (row.end !== null && !/\bfor\s+\d+\s+(?:rows?|rounds?|rnds?)\b/i.test(body)) {
     const parts = body.split("//");
-    return `${parts[0].trim()} for ${row.end - row.start + 1} rounds${parts.length > 1 ? " //" + parts.slice(1).join("//") : ""}`;
+    return `${parts[0].trim()} for ${row.end - row.start + 1} ${row.kind==='row'?'rows':'rounds'}${parts.length > 1 ? " //" + parts.slice(1).join("//") : ""}`;
   }
   return body;
 }
 function duration(body: string) {
-  const match = /\bfor\s+(\d+)\s+(?:rounds?|rnds?)\b/i.exec(body);
+  const match = /\bfor\s+(\d+)\s+(?:rows?|rounds?|rnds?)\b/i.exec(body);
   return match ? Math.min(150, Math.max(1, Number(match[1]))) : 1;
 }
 /** Round labels are structural; editing a hold duration renumbers following rows. */
@@ -27,7 +27,7 @@ export function renumberWorksheet(lines: string[]) {
       const body = worksheetInstruction(line);
       const span = duration(body);
       const end = next + span - 1;
-      const label = `Rnd ${next}${span > 1 ? "–" + end : ""}`;
+      const label = `${row.kind==='row'?'Row':'Rnd'} ${next}${span > 1 ? "–" + end : ""}`;
       next = end + 1;
       return `${label}: ${body}`;
     })
@@ -40,12 +40,12 @@ export function editWorksheetRow(
 ) {
   const lines = source.split(/\r?\n/);
   lines[line - 1] =
-    `Rnd 1: ${stripWrittenCount(instruction.replace(/\r?\n/g, " "))}`;
+    `${readRoundLine(lines[line-1])?.kind==='row'?'Row':'Rnd'} 1: ${stripWrittenCount(instruction.replace(/\r?\n/g, " "))}`;
   return renumberWorksheet(lines);
 }
 export function insertWorksheetRow(source: string, afterLine: number) {
   const lines = source ? source.split(/\r?\n/) : [];
-  lines.splice(afterLine, 0, "Rnd 1: ");
+  lines.splice(afterLine, 0, parsePattern(source).construction==='rows' || lines.some(l=>readRoundLine(l)?.kind==='row') ? 'Row 1: ' : 'Rnd 1: ');
   return renumberWorksheet(lines);
 }
 export function deleteWorksheetRow(source: string, line: number) {
@@ -58,6 +58,8 @@ export function pasteWorksheetRows(source: string, line: number, text: string) {
     throw new Error("Paste a pattern under 120,000 characters.");
   if (text.split("\n").filter((l) => l.trim()).length > 150)
     throw new Error("Paste at most 150 worksheet rows at a time.");
+  const lines = source.split(/\r?\n/);
+  const flat = parsePattern(source).construction==='rows';
   const incoming = text
     .replace(/\r/g, "")
     .trim()
@@ -65,15 +67,14 @@ export function pasteWorksheetRows(source: string, line: number, text: string) {
     .filter((l) => l.trim())
     .map((l) => {
       const row =
-        /^(?:(?:rnd|round|r)\.?\s*\d|\d+(?:\s*[-–]\s*\d+)?\s*:)/i.test(l.trim())
+        /^(?:(?:row|rnd|round|r)\.?\s*\d|\d+(?:\s*[-–]\s*\d+)?\s*:)/i.test(l.trim())
           ? readRoundLine(l)
           : null;
       return row
-        ? `Rnd ${row.start}${row.end ? "–" + row.end : ""}: ${stripWrittenCount(row.instruction)}`
-        : `Rnd 1: ${stripWrittenCount(l.trim())}`;
+        ? `${row.kind==='row'?'Row':'Rnd'} ${row.start}${row.end ? "–" + row.end : ""}: ${stripWrittenCount(row.instruction)}`
+        : `${flat?'Row':'Rnd'} 1: ${stripWrittenCount(l.trim())}`;
     });
   if (!incoming.length) return source;
-  const lines = source.split(/\r?\n/);
   const first = readRoundLine(incoming[0] ?? "");
   if (incoming.length > 1 && first?.start === 1) {
     const firstRow = lines.findIndex((l) => readRoundLine(l));
@@ -87,17 +88,18 @@ export function pasteWorksheetRows(source: string, line: number, text: string) {
 }
 /** Totals are generated at export time, so saved counts never become stale. */
 export function writtenPattern(source: string) {
+  const parsed=parsePattern(source);
   return source
     .split(/\r?\n/)
-    .map((line) => {
+    .map((line, index) => {
       const row = readRoundLine(line);
       if (!row) return line;
       const body = worksheetInstruction(line);
       try {
-        const summary = analyzeInstruction(body);
+        const summary = analyzeInstruction(body,parsed.rounds.find(r=>r.line===index+1)?.inputCount || undefined,row.kind==='row');
         const span = summary.repeatRounds ?? 1;
         const parts = body.split("//");
-        return `Rnd ${row.start}${span > 1 ? "–" + (row.start + span - 1) : ""}: ${parts[0].trim()} (${summary.outputCount})${parts.length > 1 ? " //" + parts.slice(1).join("//") : ""}`;
+        return `${row.kind==='row'?'Row':'Rnd'} ${row.start}${span > 1 ? "–" + (row.start + span - 1) : ""}: ${parts[0].trim()} (${summary.outputCount})${parts.length > 1 ? " //" + parts.slice(1).join("//") : ""}`;
       } catch {
         return line;
       }
@@ -107,11 +109,12 @@ export function writtenPattern(source: string) {
 
 /** Spreadsheet export keeps grouped rounds and calculates totals per round. */
 export function csvPattern(source: string) {
+  const parsed=parsePattern(source);
   const rows: (string | number)[][] = [
-    ["Round", "Instructions", "Total", "Yarn", "Notes"],
+    [parsed.construction==='rows'?"Row":"Round", "Instructions", "Total", "Yarn", "Notes"],
   ];
   let yarn = "red";
-  for (const line of source.split(/\r?\n/)) {
+  for (const [index,line] of source.split(/\r?\n/).entries()) {
     if (!line.trim()) continue;
     const [code, ...notes] = line.split("//");
     const color = /^\s*\[([^\]]+)\]\s*$/.exec(code);
@@ -131,7 +134,7 @@ export function csvPattern(source: string) {
     let end = row.end ?? row.start;
     let rowYarns = yarn;
     try {
-      const summary = analyzeInstruction(body);
+      const summary = analyzeInstruction(body,parsed.rounds.find(r=>r.line===index+1)?.inputCount || undefined,row.kind==='row');
       total = summary.outputCount;
       end = row.start + (summary.repeatRounds ?? 1) - 1;
       const used = new Set<string>();
@@ -147,14 +150,14 @@ export function csvPattern(source: string) {
             } else yarn = operation.name;
           }
         };
-        visit(summary.operations);
+        visit(summary.turning);visit(summary.operations);
       }
       rowYarns = [...used].join("; ");
     } catch {
       // Keep unfinished instructions without inventing a stitch total.
     }
     rows.push([
-      `Rnd ${row.start}${end > row.start ? "–" + end : ""}`,
+      `${row.kind==='row'?'Row':'Rnd'} ${row.start}${end > row.start ? "–" + end : ""}`,
       instruction.trim(),
       total,
       rowYarns,
@@ -168,4 +171,19 @@ export function csvPattern(source: string) {
     return `"${safe.replaceAll('"', '""')}"`;
   };
   return "\uFEFF" + rows.map((row) => row.map(cell).join(",")).join("\r\n") + "\r\n";
+}
+
+/** Move an instruction row; standalone notes/directives keep their source positions. */
+export function moveWorksheetRow(source: string, fromLine: number, toLine: number, after=false): string {
+  const lines=source.split(/\r?\n/);
+  const slots=lines.flatMap((line,i)=>readRoundLine(line)?[i]:[]);
+  const from=slots.indexOf(fromLine-1),to=slots.indexOf(toLine-1);
+  if(from<0 || to<0 || from===to)return source;
+  const rows=slots.map(i=>lines[i]);
+  const [moved]=rows.splice(from,1);
+  const destination=to+(after?1:0)-(from<to?1:0);
+  if(destination===from)return source;
+  rows.splice(destination,0,moved);
+  slots.forEach((slot,i)=>{lines[slot]=rows[i];});
+  return renumberWorksheet(lines);
 }

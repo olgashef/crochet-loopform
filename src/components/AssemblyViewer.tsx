@@ -8,6 +8,7 @@ import { offsetRows } from '../lib/rowOffsets';
 import type { Piece } from '../lib/studio';
 import { attachAtStitch, identityPlacement, piecePivot, placementPosition, stagedPlacement, type PiecePlacement } from '../lib/assembly';
 import { createPieceMesh, disposePieceMesh } from '../lib/pieceMesh';
+import { createRoundHighlight } from '../lib/roundHighlight';
 import type { ViewerHandle } from './ModelViewer';
 import './ModelViewer.css';
 
@@ -17,6 +18,7 @@ interface Props {
   activeId: string;
   tool: AssemblyTool;
   thickness: number;
+  highlightedRounds: readonly number[];
   onSelect(id: string): void;
   onPlace(id: string, placement: PiecePlacement): void;
   onTransform(id: string, placement: PiecePlacement): void;
@@ -50,7 +52,9 @@ export const AssemblyViewer = forwardRef<ViewerHandle, Props>(function AssemblyV
     zoomOut: () => { const r=runtime.current;if(r)r.camera.position.sub(r.orbit.target).multiplyScalar(1.25).add(r.orbit.target); },
     exportImage: () => {
       const r=runtime.current; if(!r)return;
-      const helpers=[r.transform.getHelper(),r.marker,r.outline], visibility=helpers.map(h=>h.visible);
+      const helpers: THREE.Object3D[]=[r.transform.getHelper(),r.marker,r.outline];
+      for(const entry of r.entries.values()) {const overlay=entry.content.getObjectByName('active-round-highlight');if(overlay)helpers.push(overlay);}
+      const visibility=helpers.map(h=>h.visible);
       helpers.forEach(h=>h.visible=false);r.renderer.render(r.scene,r.camera);
       const a=document.createElement('a');a.download='loopform-assembly.png';a.href=r.renderer.domElement.toDataURL('image/png');a.click();
       helpers.forEach((h,i)=>h.visible=visibility[i]);
@@ -155,7 +159,7 @@ export const AssemblyViewer = forwardRef<ViewerHandle, Props>(function AssemblyV
     const anchorAt=(event:PointerEvent):ModelPoint|undefined=>{
       const main=entries.get(current.current.pieces[0].id),intersection=hit(event,true);if(!main||!intersection)return;
       const local=main.root.worldToLocal(intersection.point.clone());let point:ModelPoint|undefined,distance=Infinity;
-      for(const p of main.model.points)if(!p.branch){const d=local.distanceToSquared(new THREE.Vector3().fromArray(p.position));if(d<distance){distance=d;point=p;}}
+      for(const p of main.model.points)if(!p.branch&&!p.auxiliary){const d=local.distanceToSquared(new THREE.Vector3().fromArray(p.position));if(d<distance){distance=d;point=p;}}
       return point;
     };
     let down={x:0,y:0,handle:false};
@@ -188,6 +192,21 @@ export const AssemblyViewer = forwardRef<ViewerHandle, Props>(function AssemblyV
     };
   }, []);
   useEffect(()=>{runtime.current?.refresh(props);},[props.pieces,props.activeId,props.tool,props.thickness]);
+  useEffect(()=>{
+    const r=runtime.current;if(!r)return;
+    for(const [id,entry] of r.entries) {
+      const previous=entry.content.getObjectByName('active-round-highlight');
+      if(previous){previous.removeFromParent();disposePieceMesh(previous);}
+      if(id!==props.activeId)continue;
+      const nodes=entry.content.getObjectByName('yarn-stitches');
+      const bobbles=entry.content.getObjectByName('yarn-bobbles');
+      entry.content.add(createRoundHighlight(props.highlightedRounds,[
+        {mesh:nodes instanceof THREE.InstancedMesh?nodes:null,points:entry.model.points},
+        {mesh:bobbles instanceof THREE.InstancedMesh?bobbles:null,points:entry.model.points.filter(p=>p.type==='bobble')},
+      ]));
+    }
+    r.renderer.domElement.setAttribute('aria-description',props.highlightedRounds.length?`Highlighted rounds on the active piece: ${props.highlightedRounds.join(', ')}`:'No round highlighted');
+  },[props.pieces,props.activeId,props.thickness,props.highlightedRounds]);
   return <div ref={host} className={`model-viewer assembly-viewer ${props.tool==='place'?'placing':''}`}>
     {failed&&<div className="viewer-message"><strong>3D is unavailable</strong><span>Enable WebGL to assemble your pieces.</span></div>}
     {props.tool==='place'&&<div className="assembly-prompt"><strong>Click a stitch on {props.pieces[0].name}</strong><span>{hover||'Drag the background to rotate and reach any side.'}</span></div>}

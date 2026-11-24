@@ -29,6 +29,18 @@ fasten off
 
 Both `Round 3: (sc, inc) x6 → 18` and the older `Rnd 3: [sc, inc] rep 6 times (18)` work. Supports sc, hdc, dc, tr, ch, slst/ss, inc, dec, bobble/bbl, nested repeats, round ranges, same-stitch groups, chain branches, and safety eyes. Named color directives such as `[cream]` set the working yarn. Round-header colors and immediate suffixes such as `2 sc[#ff8800]` and `inc[,#ffffff]` are supported; suffix colors apply to their stitch operation without changing the following yarn.
 
+Choose **Chain start** in the stitch library to add a flat piece, or write a chain foundation and use `Row` labels:
+
+```text
+Pattern name: "Flat piece"
+start: ch 11
+
+Row 1: 10 sc across → 10
+Row 2: ch 1, turn, 10 sc across → 10
+```
+
+The first row works into the chain, skipping the chain nearest the hook for SC (2 for HDC, 3 for DC, 4 for TR). Each subsequent row reverses direction. Turning chains before `turn` are shown but excluded from the row total. `sc across` reuses the preceding count; **Tab** completes the total and **Add row** adds a turning row. Foundation, turning, and body stitches can be painted individually; colors remain inline in the saved pattern. Rows support highlighting, worksheet editing, playback, accessories, and assembly. The preview stays open and flat instead of closing the strip into a ring. Joined-chain rings and tubes are supported: `start: ch 4, join` with `Round 1: 8 sc in ring`, or `start: ch 30, join` with `Round 1: sc around`. Their foundation chains are visible and the center stays open. Choose **Chain rounds** for a flat base worked around both sides of a foundation chain. The template uses `start: ch 7 oval` and the instruction `Round 1: 5 sc, 4 sc into the last chain, turn and on the other side of chains: 4 sc, 3 sc into the last chain. [total 16]`. Subsequent rounds use ordinary round notation. Increasing rounds expand outward in the foundation plane. The preview uses a chain-length-based center spine and a continuous fabric surface, rather than stretching a closed 3D form. Foundation-chain stitches remain visible, paintable, and connected to their first-round children.
+
 `orientation top-down` places the first round at the crown. `orientation bottom-up` places it at the bottom. Choose **Safety eyes** under **Accessories** in the stitch library. Select two adjacent rounds, the gap after each eye’s stitch, and the diameter in millimeters, then confirm. The code updates in one undoable edit and the 3D view turns toward the new eyes. Cancel leaves the pattern unchanged. You can edit or remove pairs under **Piece settings & accessories → Safety eyes**.
 
 The generated instruction is `eyes between 8 and 9 at 15, 22 size 8mm stitch 5mm`. Rounds and stitch positions start at one. Eye diameter supports 1–40 mm. **Preview scale** lets you set an approximate stitch width (1–20 mm; default 5 mm) for sizing relative to your yarn. Both measurements are saved in the pattern. Older unitless eye sizes, such as `size 0.8`, still render at their original relative size; editing them in the dialog converts them to millimeters using the default stitch width.
@@ -59,11 +71,15 @@ The first number is the round, followed by one-based body stitch numbers. Extern
 
 ## Preview
 
+Uneven increases and decreases now affect the shape, not just the circumference. The preview measures how many child stitches each parent produces and resolves that growth into smooth angular modes: one-sided growth shifts each course's center, while balanced sectors create oval or lobed outlines. Decreases contribute negative growth. Later rounds inherit the deformation, and shrinking rounds contract it toward the closing tip. Course perimeters stay normalized to the existing stitch-count/gauge profile. This combines with the unequal-height shaping for HDC/DC sections.
+
+This is a deterministic, bounded geometric approximation, not a yarn/tension or stuffing simulation. It does not predict folds or self-contact for strongly ruffled patterns. No extra pattern directive is needed.
+
 Finished fabric combines an instanced continuous yarn loop with subtle helical ply ridges and a color-matched fabric backing. The backing prevents see-through gaps and blocks accidental picking of stitches on the far side. Closed amigurumi profiles have relaxed shoulders, and the foundation loops lie on the crown surface. The separate structure view exposes the construction graph.
 
 Orbit, zoom, recenter, switch front view, choose a light/dark backdrop, or expand the preview. Use playback to build the piece round by round. Move individual rounds with the height handle or a numeric offset. Yarn size changes the visual yarn thickness without changing the pattern counts.
 
-This is a geometric approximation, not a yarn/tension/stuffing physics simulation. It does not promise an exact real-world finished shape. Openwork, flat turning rows, complex freeform construction, sewing deformation, and embroidery are not simulated. Assembly positions pieces without physically sewing or deforming their fabric.
+This is a geometric approximation, not a yarn/tension/stuffing physics simulation. It does not promise an exact real-world finished shape. Openwork, complex freeform construction, and sewing deformation are not simulated. Assembly positions pieces without physically sewing or deforming their fabric.
 
 ## Assemble multiple pieces
 
@@ -104,3 +120,42 @@ Use project JSON for a complete round trip. All-piece TXT is a readable document
 The interaction model was researched from Crochet3D’s public guide and signed-in planner. Loopform uses its own local implementation and assets.
 
 Brush edits take precedence over the colors written in rounds. The editor shows a **Painted colors active** notice, and painted stitch tooltips show both the effective and written yarn colors. **Manage painted colors → Restore pattern colors** removes brush overrides for one round or the whole piece; Undo restores them. Existing projects keep their paint until this action is used.
+
+
+## Extended stitch library
+
+The left library includes insertion snippets, stitch-count descriptions, and starter pieces. **New row or round** inserts below the editor cursor and renumbers later courses. Foundation cards create a separate piece.
+
+| Construction | Pattern syntax | Count / behavior |
+| --- | --- | --- |
+| Taller stitches | `hdc`, `dc`, `tr`, `dtr` | One output; post heights affect the course profile |
+| Taller increases | `hdc inc`, `dc inc`, `tr inc`, `dtr inc` | Two stitches sharing one parent; e.g. `6 hdc inc` |
+| Triple shaping | `inc3`, `dec3` | 1→3 and 3→1 |
+| Skip | `sk` | 1→0; advances the parent cursor without creating a stitch |
+| Shared parent | `3 hdc in one st` or `(sc, hdc, sc) in one st` | Any number of ordinary stitches in one base stitch |
+| Automatic repeat | `(sc, inc) around` | Repeat by **consumed** stitches, with no fractional repeats |
+| Loop-only section | `BLO 2 sc, 4 sc` or `FLO (sc, hdc, sc)` | Modifier applies to the following stitch/count/group |
+| Loop-only course | `Round 2: BLO: sc around` | Modifier applies to the entire course |
+| Earlier free loops | `Round 4: FLO of Round 1: sc around` | Uses the actual earlier parents; rejects already-worked loops |
+| Chain out and back | `ch 3 back (sc, (sc, sl) in one st)` | Adds a branch; does not change body counts |
+| Uncounted turning chain | `ch 1, turn, 10 sc` or `10 sc, ch 1, turn` | Visible chain; excluded from row totals |
+| Counted turning chain | `ch 3 (counts as dc), 9 dc` | Ten outputs, including a visible chain standing in for one DC |
+| First row | `dc in 4th ch from hook and in each ch across` | Skips the specified turning chains |
+| Bobble variants | `bobble`, `bobble4`, `bobble3`, `bobble2`, `trbo` | One output, with distinct cluster size/leg count |
+| Other textures | `puff`, `popcorn`, `shell` | Puff/popcorn: one output. Shell: five DC in one parent |
+| Finishing | `join`, `fasten off` | Join closes the course without adding to its body count |
+
+`sl`, `slst`, and `ss` are accepted slip-stitch aliases. Colors remain inline after painting, including foundation chains, branches, loop modifiers, and counted chains.
+
+Example of a rim followed by a second section from the free loops:
+
+```text
+start: magic ring
+Round 1: 12 sc in mr → 12
+Round 2: BLO: sc around → 12
+Round 3: sc around → 12
+Round 4: FLO of Round 1: (sc, inc) around → 18
+Round 5: sc around → 18
+```
+
+The preview is a deterministic, gauge-based construction model. It uses stitch heights, shared parents, loop selection, branching, and local increase/decrease distribution; it does not simulate fiber friction, yarn elasticity, stuffing pressure, or self-collision. Texture meshes approximate the visible clusters rather than reconstructing every yarn-over. Dense ruffles, lace, and intersecting branches can therefore differ from a physical swatch.

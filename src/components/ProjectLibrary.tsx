@@ -1,3 +1,4 @@
+import { ProjectPreview } from './ProjectPreview';
 import { pieceName } from "../lib/pieceName";
 import { useEffect, useState } from 'react';
 import { Archive, Copy, FolderOpen, Plus, RotateCcw, Search, X } from 'lucide-react';
@@ -28,6 +29,7 @@ export function ProjectLibrary({currentId,onClose,onOpen,onNew,onImport}: Props)
     {busy&&<p role="status">Saving and loading projects…</p>}
     {!busy&&!visible.length&&<div className="library-empty"><FolderOpen/><h3>{query?'No matching projects':archived?'No archived projects':'Your next creation starts here'}</h3><p>{query?'Try a different name.':archived?'Archived projects stay here until you restore them.':'Create a project or import a Loopform backup.'}</p></div>}
     <div className="project-library-grid">{visible.map(entry=><article className="library-project" key={entry.id}>
+      <ProjectPreview project={entry.project} />
       <div className="library-project-heading"><FolderOpen size={22}/><h3>{entry.project.name||'Untitled project'}</h3>{entry.id===currentId&&<small>Current</small>}</div>
       <p>{entry.project.pieces.length} {entry.project.pieces.length===1?'piece':'pieces'} · {entry.project.pieces.map(pieceName).join(', ')}</p>
       <time dateTime={new Date(entry.updatedAt).toISOString()}>Saved {new Date(entry.updatedAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})}</time>

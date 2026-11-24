@@ -25,7 +25,7 @@ export function piecePivot(model: ModelGeometry, edge: PiecePlacement['edge']): 
   return round ? new Vector3().fromArray(round.center) : new Vector3();
 }
 export function findAnchor(model: ModelGeometry, placement: PiecePlacement): ModelPoint | undefined {
-  return model.points.find(p => !p.branch && p.round === placement.anchor?.round && p.index === placement.anchor?.index);
+  return model.points.find(p => !p.branch && !p.auxiliary && p.round === placement.anchor?.round && p.index === placement.anchor?.index);
 }
 export function placementPosition(placement: PiecePlacement, parent?: ModelGeometry): Vector3 {
   const position = new Vector3().fromArray(placement.position);
@@ -33,17 +33,19 @@ export function placementPosition(placement: PiecePlacement, parent?: ModelGeome
   return position;
 }
 export function surfaceNormal(model: ModelGeometry, point: ModelPoint): Vector3 {
+  if(model.construction==='rows')return new Vector3(0,0,1);
   const centers = model.roundCenters;
   const index = centers.findIndex(r => r.round === point.round);
   const current = centers[index];
-  const radial = new Vector3(point.position[0]-(current?.center[0]??0),0,point.position[2]-(current?.center[2]??0));
+  const radial = new Vector3().fromArray(point.position).sub(new Vector3().fromArray(current?.center??[0,0,0]));
   if (radial.lengthSq() < 1e-10) radial.set(0,0,1);
   radial.normalize();
   const before = centers[Math.max(0,index-1)], after = centers[Math.min(centers.length-1,index+1)];
   if (!before || !after) return radial;
-  const rise = after.center[1]-before.center[1], dr = after.radius-before.radius;
-  if (Math.abs(rise) < 1e-8) return radial;
-  return radial.multiplyScalar(Math.abs(rise)).add(new Vector3(0,-dr*Math.sign(rise),0)).normalize();
+  const travel = new Vector3().fromArray(after.center).sub(new Vector3().fromArray(before.center));
+  const rise=travel.length(), dr=after.radius-before.radius;
+  if (rise < 1e-8) return radial;
+  return radial.multiplyScalar(rise).addScaledVector(travel,-dr/rise).normalize();
 }
 export function attachAtStitch(parentId: string, parent: ModelGeometry, child: ModelGeometry, point: ModelPoint, previous: PiecePlacement): PiecePlacement {
   const pivot = piecePivot(child,previous.edge);

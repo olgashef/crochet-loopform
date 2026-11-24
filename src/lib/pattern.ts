@@ -3,7 +3,7 @@ import { parseEyeDirective, validateEyePair, type SafetyEyePair } from "./safety
 import type { PatternOrientation } from "./orientation";
 import { MAX_EMBROIDERY, parseEmbroideryDirective, validateEmbroidery, type EmbroiderySegment } from './embroidery';
 
-export type StitchType = "sc" | "hdc" | "dc" | "tr" | "ch" | "slst" | "dec" | "bobble";
+export type StitchType = "sc" | "hdc" | "dc" | "tr" | "ch" | "slst" | "dec" | "bobble" | "dtr" | "dec3" | "bobble2" | "bobble3" | "bobble4" | "trbo" | "puff" | "popcorn";
 
 export interface Stitch {
   id: number;
@@ -18,10 +18,15 @@ export interface Stitch {
   previous: number | null;
   sourceLine: number;
   isIncrease: boolean;
+  loop?: 'front'|'back';
+  countedChain?: number;
+  chainIndex?: number;
+  auxiliary?: { kind: 'foundation' | 'turning'; step: number; count: number };
   branch?: { anchor: number; step: number; length: number; returning: boolean };
 }
 
 export interface PatternRound {
+  joined?:boolean;
   number: number;
   /** First stitch's color; individual stitches may use other yarns. */
   color: string;
@@ -41,6 +46,12 @@ export interface Diagnostic {
 }
 
 export interface ParsedPattern {
+  joinedStart?: {chains:number;intoHole:boolean;line:number};
+  ovalStart?: { chains: number; line: number };
+
+  construction?: 'rows';
+  chainStart?: { line: number; stitches: Stitch[] };
+  make?: number;
   edge?: PieceEdge;
   orientation: PatternOrientation;
   eyes: SafetyEyePair[];
@@ -92,7 +103,17 @@ export const YARN_COLORS: Readonly<Record<string, string>> = {
   mint: "#a9c6b5",
 };
 
-const STITCH_ALIASES: Readonly<Record<string, StitchType | "inc">> = {
+const STITCH_ALIASES: Readonly<Record<string, StitchType | "inc" | "sk">> = {
+  sl: "slst",
+  sk: "sk",
+  dtr: "dtr",
+  dec3: "dec3",
+  bobble2: "bobble2",
+  bobble3: "bobble3",
+  bobble4: "bobble4",
+  trbo: "trbo",
+  puff: "puff",
+  popcorn: "popcorn",
   sc: "sc",
   hdc: "hdc",
   dc: "dc",
@@ -130,17 +151,18 @@ function yarnColor(name: string) {
 export type Operation =
   | StitchType
   | "inc"
+  | "sk"
   | { color: string; name: string }
-  | { stitch: StitchType | "inc"; colors: (string | null)[]; name: string }
-  | { same: Operation[] }
-  | { branch: { chain: number; slip: number; colors?: (string | null)[] } };
+  | { stitch: StitchType | "inc" | "sk"; countedChain?: number; loop?: 'front'|'back'; colors: (string | null)[]; name: string }
+  | { same: Operation[]; loop?: 'front'|'back' }
+  | { branch: { chain: number; slip: number; back?:Operation[]; colors?: (string | null)[] } };
 
 function operationCounts(op: Operation): { input: number; output: number; total: number } {
   if (typeof op !== "string" && "stitch" in op) return operationCounts(op.stitch);
   if (typeof op === "string") return {
-    input: op === "ch" ? 0 : op === "dec" ? 2 : 1,
-    output: op === "inc" ? 2 : 1,
-    total: op === "inc" ? 2 : 1,
+    input: op === "ch" ? 0 : op === "dec3" ? 3 : op === "dec" ? 2 : 1,
+    output: op === "sk" ? 0 : op === "inc" ? 2 : 1,
+    total: op === "sk" ? 0 : op === "inc" ? 2 : 1,
   };
   if ("same" in op) {
     const total = op.same.reduce((n, child) => n + operationCounts(child).output, 0);
@@ -184,7 +206,7 @@ function tokenize(source: string): Token[] {
       position += colorPair[0].length;
       continue;
     }
-    const token = /^(?:\d+|[a-z]+|[\[\](),*×])/i.exec(rest);
+    const token = /^(?:\d+|(?:bobble[234]|dec3|[a-z]+)|[\[\](),*×])/i.exec(rest);
     if (!token) {
       throw new PatternSyntaxError(
         `Unexpected “${rest[0]}” near column ${position + 1}. Use stitches such as sc, inc, dec or [sc, inc] rep 6 times.`,
@@ -196,7 +218,20 @@ function tokenize(source: string): Token[] {
   return tokens;
 }
 
+function loopOperations(ops:Operation[],loop:'front'|'back'):Operation[] {
+  return ops.map(op=>typeof op==='string'?{stitch:op,colors:[null],name:'',loop}:'stitch' in op?{...op,loop}:'same' in op?{...op,loop,same:loopOperations(op.same,loop)}:op);
+}
+
 function parseOperations(source: string): Operation[] {
+  source=source.replace(/\b(\d+)\s*(hdc|dc|tr|dtr)\s+inc\b/gi,(_,n,type)=>`([${type}, ${type}] in same st) x${n}`)
+    .replace(/\b(\d+)\s*(inc3|shell)\b/gi,(_,n,type)=>`(${type}) x${n}`)
+    .replace(/\b(hdc|dc|tr|dtr)\s+inc\b/gi,(_,type)=>`[${type}, ${type}] in same st`)
+    .replace(/\binc3\b/gi,'[sc, sc, sc] in same st')
+    .replace(/\bshell\b/gi,'[dc, dc, dc, dc, dc] in same st')
+    .replace(/\b(\d+)\s*(sc|hdc|dc|tr|dtr|sl)\s+in\s+(?:one|same)\s+st(?:itch)?\b/gi,(_,n,type)=>'['+Array(Math.min(8000,Number(n))).fill(type).join(', ')+'] in same st')
+    .replace(/\bin one st(?:itch)?\b/gi,'in same st');
+
+  source=source.replace(/\bch\s+(\d+)\s+back\s*\(/gi,'backbranch($1,');
   const tokens = tokenize(source);
   let cursor = 0;
 
@@ -240,10 +275,31 @@ function parseOperations(source: string): Operation[] {
         "Repeats are nested too deeply. Use at most 12 levels.",
       );
     const result: Group = { operations: [], stitchCount: 0 };
+    let pendingLoop:'front'|'back'|undefined;
+
     while (cursor < tokens.length && !["]", ")"].includes(tokens[cursor].value)) {
+      if(['flo','blo'].includes(tokens[cursor].value)){pendingLoop=tokens[cursor++].value==='flo'?'front':'back';continue;}
       if (tokens[cursor].value === ",") {
         cursor++;
         continue;
+      }
+      if(tokens[cursor].value==='countedchain') {
+        cursor++;if(tokens[cursor++]?.value!=='(')throw new PatternSyntaxError('Use ch 3 (counts as dc).');
+        const count=readCount();if(count>5)throw new PatternSyntaxError('Use 1–5 chains for a counted turning chain.');
+        if(tokens[cursor]?.value===',')cursor++;
+        const type=STITCH_ALIASES[tokens[cursor++]?.value];
+        if(!type||!['sc','hdc','dc','tr','dtr'].includes(type)||tokens[cursor++]?.value!==')')throw new PatternSyntaxError('A turning chain must count as sc, hdc, dc, tr or dtr.');
+        const suffix=tokens[cursor];const colors=suffix?.color||suffix?.colors?(cursor++,suffix.colors??[yarnColor(suffix.value)]):[null];
+        append(result,{operations:[{stitch:type,colors,name:'',countedChain:count}],stitchCount:1},1);continue;
+      }
+      if(tokens[cursor].value==='backbranch') {
+        cursor++;if(tokens[cursor++]?.value!=='(')throw new PatternSyntaxError('Use ch 3 back (2 sc).');
+        const chain=readCount();if(tokens[cursor]?.value===',')cursor++;
+        const back=sequence(depth+1).operations;
+        if(tokens[cursor++]?.value!==')')throw new PatternSyntaxError('Close the chain-back instructions with ).');
+        const input=back.reduce((n,op)=>n+operationCounts(op).input,0),slip=back.reduce((n,op)=>n+operationCounts(op).output,0);
+        if(input!==chain-1||back.some(op=>typeof op==='string'?op==='ch': 'branch' in op))throw new PatternSyntaxError('Work back across every chain except the turning chain.');
+        append(result,{operations:[{branch:{chain,slip,back}}],stitchCount:chain+slip},1);continue;
       }
       if (tokens[cursor].value === "branch") {
         cursor++;
@@ -251,19 +307,22 @@ function parseOperations(source: string): Operation[] {
           throw new PatternSyntaxError("Use branch(12 ch, 11 slst) for a chain out and return.");
         const inner = sequence(depth + 1).operations;
         if (tokens[cursor++]?.value !== ")") throw new PatternSyntaxError("A branch is missing its closing ).");
-        const types: string[] = [], colors: (string | null)[] = [];
-        let branchColor: string | null = null;
-        for (const op of inner) {
-          if (typeof op !== 'string' && 'color' in op) { branchColor = op.color; continue; }
-          const type = typeof op === 'string' ? op : 'stitch' in op ? op.stitch : '';
-          if (type !== 'ch' && type !== 'slst') throw new PatternSyntaxError('A branch supports chains followed by slip stitches.');
-          types.push(type);
-          colors.push(typeof op !== 'string' && 'stitch' in op ? op.colors[0] ?? branchColor : branchColor);
+        const colors:(string|null)[]=[];
+        let branchColor:string|null=null,split=0;
+        for(;split<inner.length;split++){
+          const op=inner[split];
+          if(typeof op!=='string'&&'color' in op){branchColor=op.color;continue;}
+          const type=typeof op==='string'?op:'stitch' in op?op.stitch:'';
+          if(type!=='ch')break;
+          colors.push(typeof op!=='string'&&'stitch' in op?op.colors[0]??branchColor:branchColor);
         }
-        const chain = types.filter(t => t === 'ch').length, slip = types.length - chain;
-        if (!chain || types.some((t, i) => t !== (i < chain ? 'ch' : 'slst')) || (slip && slip !== chain - 1))
-          throw new PatternSyntaxError('Use branch(12 ch, 11 slst): chains first, then one fewer slip stitch.');
-        append(result, { operations: [{ branch: { chain, slip, colors } }], stitchCount: chain + slip }, 1);
+        const chain=colors.length,back=inner.slice(split);
+        const input=back.reduce((n,op)=>n+operationCounts(op).input,0),slip=back.reduce((n,op)=>n+operationCounts(op).output,0);
+        if(!chain || back.length&&input!==chain-1 || back.some(op=>typeof op==='string'?op==='ch': 'branch' in op))
+          throw new PatternSyntaxError('A branch starts with chains, then works back across all but its turning chain.');
+        const simple=back.every(op=>typeof op==='string'?op==='slst':'stitch' in op&&op.stitch==='slst');
+        if(simple)for(const op of back)colors.push(typeof op!=='string'&&'stitch' in op?op.colors[0]??branchColor:branchColor);
+        append(result,{operations:[{branch:{chain,slip,colors,...(!simple?{back}:{} )}}],stitchCount:chain+slip},1);
         continue;
       }
       if (tokens[cursor].color) {
@@ -293,7 +352,7 @@ function parseOperations(source: string): Operation[] {
           cursor++;
           if (tokens[cursor++]?.value !== "same" || !["st", "stitch"].includes(tokens[cursor++]?.value ?? ""))
             throw new PatternSyntaxError("Use [bobble, sc] in same st to work multiple stitches into one parent.");
-          if (operations.some((op) => typeof op === "string" ? ["dec", "ch", "inc"].includes(op) : "stitch" in op ? ["dec", "ch", "inc"].includes(op.stitch) : !("color" in op)))
+          if (operations.some((op) => typeof op === "string" ? ["dec", "dec3", "sk", "ch", "inc"].includes(op) : "stitch" in op ? ["dec", "dec3", "sk", "ch", "inc"].includes(op.stitch) : !("color" in op)))
             throw new PatternSyntaxError("A same-stitch group supports ordinary stitches, bobbles and color changes; no chains, decreases, increases or branches.");
           operations = [{ same: operations }];
         }
@@ -305,11 +364,13 @@ function parseOperations(source: string): Operation[] {
           repetitions *= readCount();
           if (["time", "times"].includes(tokens[cursor]?.value ?? "")) cursor++;
         }
+        if(pendingLoop){operations=loopOperations(operations,pendingLoop);pendingLoop=undefined;}
         append(result, { operations, stitchCount: group.stitchCount }, repetitions);
         continue;
       }
       let count = 1;
-      if (/^\d+$/.test(tokens[cursor].value)) {
+      const hasPrefixCount=/^\d+$/.test(tokens[cursor].value);
+      if (hasPrefixCount) {
         count = readCount();
         if (["x", "×", "*"].includes(tokens[cursor]?.value ?? "")) cursor++;
       }
@@ -326,8 +387,13 @@ function parseOperations(source: string): Operation[] {
         throw new PatternSyntaxError(
           `Unknown stitch “${token.value}”. Supported: sc, hdc, dc, tr, bobble, ch, slst, inc and dec.`,
         );
+      let operationEnd=token.position+token.value.length;
+      if(operation === 'ch' && !hasPrefixCount && /^\d+$/.test(tokens[cursor]?.value ?? '')) {
+        operationEnd=tokens[cursor].position+tokens[cursor].value.length;
+        count=readCount();
+      }
       const suffix = tokens[cursor];
-      const adjacentColor = suffix && (suffix.color || suffix.colors) && suffix.position === token.position + token.value.length;
+      const adjacentColor = suffix && (suffix.color || suffix.colors) && suffix.position === operationEnd;
       let parsedOperation: Operation = operation;
       if (adjacentColor) {
         cursor++;
@@ -341,8 +407,10 @@ function parseOperations(source: string): Operation[] {
         count *= readCount();
         if (["time", "times"].includes(tokens[cursor]?.value ?? "")) cursor++;
       }
+      if(pendingLoop){parsedOperation=loopOperations([parsedOperation],pendingLoop)[0];pendingLoop=undefined;}
       append(result, { operations: [parsedOperation], stitchCount: operationCounts(operation).total }, count);
     }
+    if(pendingLoop)throw new PatternSyntaxError('Add a stitch or group after FLO/BLO.');
     return result;
   }
 
@@ -355,6 +423,7 @@ function parseOperations(source: string): Operation[] {
 }
 
 export interface RoundLine {
+  kind?: 'row';
   start: number;
   end: number | null;
   instruction: string;
@@ -362,7 +431,7 @@ export interface RoundLine {
 /** Accept code notation and the compact printed Rnd 9–16 notation. */
 export function readRoundLine(line: string): RoundLine | null {
   const match =
-    /^(?:(?:rnd|round|r)\.?\s*)?(\d+)(?:\s*[-–—]\s*(\d+))?(?:\s*(\[[^\[\]]+\]))?(?:\s*:\s*|\s+)(.*)$/i.exec(
+    /^(?:(?:row|rnd|round|r)\.?\s*)?(\d+)(?:\s*[-–—]\s*(\d+))?(?:\s*(\[[^\[\]]+\]))?(?:\s*:\s*|\s+)(.*)$/i.exec(
       line.trimStart(),
     );
   return match
@@ -370,17 +439,21 @@ export function readRoundLine(line: string): RoundLine | null {
         start: Number(match[1]),
         end: match[2] ? Number(match[2]) : null,
         instruction: `${match[3] ? match[3] + " " : ""}${match[4]}`,
+        ...(/^\s*row\b/i.test(line) ? {kind: 'row' as const} : {}),
       }
     : null;
 }
 
-export function analyzeInstruction(text: string, previousCount?: number) {
+export function analyzeInstruction(text: string, previousCount?: number, flatRows = false) {
   let instruction = text.split("//")[0].trim();
+  instruction=instruction.replace(/\b(\d+)\s*(sc|hdc|dc|tr|dtr)\s+in\s+\d+(?:nd|rd|th)\s+ch\s+from\s+hook(?!\s+and)/gi,(_,n,type)=>`[${n} ${type}] in same st`);
+  instruction=instruction.replace(/(sc|hdc|dc|tr|dtr)\s+in\s+\d+(?:nd|rd|th)\s+ch\s+from\s+hook(\s+and\s+in\s+each\s+ch\s+across)?/gi,(_,type,across)=>`${type}${across?' across':''}`);
+
   const declaredMatch = /\s*(?:\((\d+)\)|→\s*(\d+))\s*$/.exec(instruction);
   const declaredCount = declaredMatch ? Number(declaredMatch[1] ?? declaredMatch[2]) : null;
   if (declaredMatch)
     instruction = instruction.slice(0, declaredMatch.index).trim();
-  const duration = /\s+for\s+(\d+)\s+(?:rounds?|rnds?)\s*$/i.exec(instruction);
+  const duration = /\s+for\s+(\d+)\s+(?:rows?|rounds?|rnds?)\s*$/i.exec(instruction);
   const repeatRounds = duration ? Number(duration[1]) : null;
   if (
     repeatRounds !== null &&
@@ -390,36 +463,139 @@ export function analyzeInstruction(text: string, previousCount?: number) {
   )
     throw new PatternSyntaxError(`Use between 1 and ${MAX_ROUNDS} rounds.`);
   if (duration) instruction = instruction.slice(0, duration.index).trim();
+  instruction=instruction.replace(/ch\s+(\d+)\s*\(counts as (sc|hdc|dc|tr|dtr)\)/gi,'countedchain($1, $2)');
+  const endingTurn=/,\s*((?:ch\s+\d+|\d*\s*ch)(?:\[[^\]]+\])?),\s*turn\s*$/i.exec(instruction);
+  if(endingTurn)instruction=instruction.slice(0,endingTurn.index);
+  let turning: Operation[] = endingTurn?parseOperations(endingTurn[1]):[];
+  if (/\bturn\b/i.test(instruction)) {
+    if (!flatRows) throw new PatternSyntaxError('Turning is for flat rows. Start with start: ch 11 and use Row labels.');
+    const parts=instruction.split(/\bturn\b/i);
+    if(parts.length!==2)throw new PatternSyntaxError('Use one turn at the beginning of a row.');
+    const prefix=parts[0].replace(/,\s*$/, '').trim();
+    // A row-header color can precede a bare turn without a chain.
+    const colorOnly=/^(?:\[[^\]]+\]\s*)+$/.test(prefix);
+    turning=prefix?(colorOnly?parseOperations(`${prefix} ch`).slice(0,-1):parseOperations(prefix)):[];
+    if(turning.some(op=>typeof op==='string'?op!=='ch':'stitch' in op?op.stitch!=='ch':!('color' in op)))
+      throw new PatternSyntaxError('Only turning chains can appear before turn.');
+    instruction=parts[1].replace(/^\s*,/, '').trim();
+  }
+  const joinedRound=/(?:,\s*|\s+)join\s*$/i.test(instruction);
+  instruction=instruction.replace(/,?\s*join\s*$/i,'');
   const foundation = /\s+in\s+(?:mc|mr|ring|magic\s+ring)\s*$/i.test(instruction);
   if (foundation)
     instruction = instruction
       .replace(/\s+in\s+(?:mc|mr|ring|magic\s+ring)\s*$/i, "")
       .trim();
-  instruction = instruction.replace(/\b(sc|hdc|dc|tr|slst|ss|bobble|bbl)\s+around\b/gi, (_, stitch: string) => {
+  if(!flatRows && /\bacross\b/i.test(instruction))throw new PatternSyntaxError('Use start: ch 11 and Row labels to work across flat rows.');
+  instruction = instruction.replace(/\b(?:(\d+)\s*)?(sc|hdc|dc|tr|dtr|slst|ss|bobble|bbl)\s+(?:around|across)\b/gi, (_, written: string|undefined, stitch: string) => {
+    if(written)return `${written} ${stitch}`;
     const count = previousCount ?? declaredCount;
     if (count === null || count === undefined || count < 1)
       throw new PatternSyntaxError("An around instruction needs a previous round. Start with a counted foundation such as 6 sc in mr.");
     return `${count} ${stitch}`;
   });
-  const operations = parseOperations(instruction);
+  const yarnPrefix=/^(\[[^\]]+\])\s+/.exec(instruction);
+  if(yarnPrefix)instruction=instruction.slice(yarnPrefix[0].length);
+  const earlyLoop=/^(BLO|FLO)(?:\s+of\s+Round\s+(\d+))?:\s*/i.exec(instruction);
+  if(earlyLoop)instruction=instruction.slice(earlyLoop[0].length);
+  instruction=instruction.replace(/,?\s*join\s*$/i,'');
+  const motif=/^(.+)\s+(?:around|across)$/i.exec(instruction);
+  if(motif) {
+    const ops=parseOperations(motif[1]),consumed=ops.reduce((n,op)=>n+operationCounts(op).input,0);
+    if(!previousCount||!consumed||previousCount%consumed)throw new PatternSyntaxError('The repeated group must consume the full previous course exactly.');
+    instruction=`(${motif[1]}) x${previousCount/consumed}`;
+  }
+  const loopHeader=earlyLoop;
+  let operations = parseOperations(`${yarnPrefix?.[1]??''} ${instruction}`);
+  if(loopHeader)operations=loopOperations(operations,loopHeader[1].toUpperCase()==='BLO'?'back':'front');
   return {
     operations,
+    endingTurn:!!endingTurn,
+    joinedRound,
+    parentRoundNumber:loopHeader?.[2]?Number(loopHeader[2]):undefined,
+    turning,
     foundation,
     declaredCount,
     repeatRounds,
     inputCount: operations.reduce((n, op) => n + operationCounts(op).input, 0),
     outputCount: operations.reduce((n, op) => n + operationCounts(op).output, 0),
-    totalCount: operations.reduce((n, op) => n + operationCounts(op).total, 0),
+    totalCount: [...turning,...operations].reduce((n, op) => n + operationCounts(op).total, 0),
   };
 }
 
 /**
- * Parse continuous-round patterns into a construction graph.
+ * Parse circular rounds or chain-based turning rows into a construction graph.
  * IDs/indexes are zero-based; round labels and source lines are one-based.
  * On an error, previously valid rounds remain available, but the invalid round
  * is never silently added to the model.
  */
 export function parsePattern(source: string): ParsedPattern {
+  const joined=/^[ \t]*start:\s*ch\s*(\d+),?\s*join(?:[ \t]+\[([^\]\n]+)\])?[ \t]*$/im.exec(source);
+  if(joined){
+    const chains=Number(joined[1]),line=source.slice(0,joined.index).split('\n').length;
+    const firstLine=source.split('\n').find(l=>/^(?:Round|Rnd)\s+1\b/i.test(l.trim()))??'';
+    const intoHole=/in (?:ring|mr|mc|its hole)/i.test(firstLine);
+    const normalized=source.replace(joined[0],'start: magic ring').replace(/^((?:Round|Rnd)\s+1[^:]*:)(.*)$/im,(_,header,body)=>header+(intoHole?body.replace(/in its hole/i,'in ring'):body.replace(/(?:sc|hdc|dc|tr|dtr) around/i,(t:string)=>`${chains} ${t.split(' ')[0]}`).replace(/(\s*→.*)?$/, ' in mr$1')));
+    const result=parsePattern(normalized);
+    if(!Number.isSafeInteger(chains)||chains<2||chains>1000)result.diagnostics.push({line,severity:'error',message:'Use 2–1000 joined chains.'});
+    if(!intoHole&&result.rounds[0]?.outputCount!==chains)result.diagnostics.push({line,severity:'error',message:'A chain tube first round must work each foundation chain.'});
+    result.joinedStart={chains,intoHole,line};
+    if(result.diagnostics.some(d=>d.severity==='error'))return result;
+    const yarns=joined[2]?.split(',').map(c=>resolveYarnColor(c.trim().toLowerCase()));
+    if(yarns?.some(c=>!c)){result.diagnostics.push({line,severity:'error',message:'Use valid yarn colors for the joined chain.'});return result;}
+    if(yarns&&yarns.length!==chains){result.diagnostics.push({line,severity:'error',message:'Provide one color per foundation chain.'});return result;}
+    const firstId=result.stitches.length;
+    const foundation:Stitch[]=Array.from({length:chains},(_,i)=>({
+      id:firstId+i,round:0,index:i,type:'ch',color:yarns?.[i]??result.rounds[0]?.color??'#f3e8d6',parents:i?[firstId+i-1]:[],previous:i?firstId+i-1:null,
+      sourceLine:line,isIncrease:false,auxiliary:{kind:'foundation',step:i+1,count:chains},
+    }));
+    for(const stitch of result.rounds[0]?.stitches??[])stitch.parents=intoHole?[foundation[Math.floor(stitch.index*chains/result.rounds[0].outputCount)].id]:[foundation[stitch.index].id];
+    if(result.rounds[0])result.rounds[0].inputCount=chains;
+    result.chainStart={line,stitches:foundation};result.stitches.push(...foundation);
+    return result;
+  }
+  const oval=/^\s*start:\s*ch\s*(\d+)\s+(?:oval|around)(?:[ \t]+\[([^\]\n]+)\])?[ \t]*$/im.exec(source);
+  if(oval) {
+    const chains=Number(oval[1]);
+    const foundationLine=source.slice(0,oval.index).split('\n').length;
+    let anchors:number[]|undefined;
+    let foundationError:string|undefined;
+    const normalized=source.replace(oval[0],'start: magic ring').replace(/^([ \t]*(?:(?:Round|Rnd|R)\.?\s*)?1(?:\s*\[[^\]]+\])?\s*:)\s*(.*)$/im,(_:string,header:string,body:string)=>{
+      const clean=body.replace(/,?\s*turn and on the other side of chains\s*:/i,', other side,').replace(/(\d+)\s*sc,?\s+into the last chain/gi,(_:string,n:string)=>'['+Array(Math.min(8000,Number(n))).fill('sc').join(', ')+'] in same st').replace(/\.?\s*\[total\s+(\d+)\]/i,' → $1');
+      const sides=clean.split(/,?\s*other side\s*,?/i);
+      try {
+        const summary=analyzeInstruction(sides.join(', '));
+        if(sides.length===2){
+          const first=analyzeInstruction(sides[0]),second=analyzeInstruction(sides[1]);
+          if(first.inputCount!==chains-1||second.inputCount!==chains-2)throw new Error(`Work ${chains-1} chain positions on the first side and ${chains-2} on the other side; same-stitch groups use one position.`);
+          anchors=[];
+          for(const [side,ops] of [first.operations,second.operations].entries()) {
+            let chain=side===0?chains-2:1;
+            for(const op of ops){const count=operationCounts(op);for(let i=0;i<count.output;i++)anchors.push(chain);chain+=(side===0?-1:1)*count.input;}
+          }
+        }
+        const flatten=(ops:Operation[]):Operation[]=>ops.flatMap(op=>typeof op!=='string'&&'same' in op?flatten(op.same):[op]);
+        const tokens=flatten(summary.operations).map(op=>typeof op==='string'?op:'color' in op?`[${op.color}]`:'stitch' in op?`${op.stitch}[${op.colors.join(',')}]`:'');
+        return header+' '+tokens.join(', ')+' in mr'+(summary.declaredCount!==null?' → '+summary.declaredCount:'');
+      }catch(error){foundationError=(error as Error).message;return header+' '+clean;}
+    });
+    const result=parsePattern(normalized);
+    if(!Number.isSafeInteger(chains)||chains<3||chains>1000)result.diagnostics.push({line:foundationLine,severity:'error',message:'An oval foundation needs 3–1000 chains.'});
+    if(foundationError)result.diagnostics.push({line:foundationLine+1,severity:'error',message:foundationError});
+    if(anchors)result.rounds[0]?.stitches.forEach((stitch,i)=>{stitch.chainIndex=anchors![i];});
+    if(Number.isSafeInteger(chains)&&chains>=3&&chains<=1000) {
+      const colors=oval[2]?.split(',').map(c=>resolveYarnColor(c.trim()));
+      if(colors&&(colors.length!==chains||colors.some(c=>!c)))result.diagnostics.push({line:foundationLine,severity:'error',message:'Foundation colors must contain one valid yarn color per chain.'});
+      const base=result.stitches.length;
+      const foundation:Stitch[]=Array.from({length:chains},(_,index)=>({id:base+index,round:0,index,type:'ch',color:colors?.[index]??result.stitches[0]?.color??YARN_COLORS.red,parents:index?[base+index-1]:[],previous:index?base+index-1:null,sourceLine:foundationLine,isIncrease:false,auxiliary:{kind:'foundation',step:index+1,count:chains}}));
+      result.chainStart={line:foundationLine,stitches:foundation};
+      result.stitches.push(...foundation);
+      result.rounds[0]?.stitches.forEach(stitch=>{if(stitch.chainIndex!==undefined)stitch.parents=[base+stitch.chainIndex];});
+    }
+    result.ovalStart={chains,line:foundationLine};
+    return result;
+  }
+
   const parsed: ParsedPattern = {
     orientation: "bottom-up",
     rounds: [],
@@ -460,6 +636,11 @@ export function parsePattern(source: string): ParsedPattern {
     }
 
     try {
+      if (/^make\b/i.test(line)) {
+        const match=/^make:\s*(\d+)$/i.exec(line);
+        if(!match || Number(match[1])<1 || Number(match[1])>30)throw new PatternSyntaxError('Use make: followed by a number from 1 to 30.');
+        parsed.make=Number(match[1]);continue;
+      }
       if (/^edge\b/i.test(line)) {
         const match = /^edge:\s*(auto|open)$/i.exec(line);
         if (!match) throw new PatternSyntaxError('Use edge: open to leave the final round open.');
@@ -468,7 +649,31 @@ export function parsePattern(source: string): ParsedPattern {
       }
       const title = /^Pattern name:\s*"(.*)"$/i.exec(line);
       if (title) { parsed.name = title[1]; named = true; continue; }
-      if (/^(?:start:\s*magic ring|fasten off)$/i.test(line)) continue;
+      if (/^start:/i.test(line) && !/^start:\s*magic ring$/i.test(line)) {
+        if(parsed.rounds.length || parsed.chainStart)throw new PatternSyntaxError('Put one chain foundation before the first row.');
+        const operations=parseOperations(line.replace(/^start:\s*/i,''));
+        if(operations.some(op=>typeof op==='string'?op!=='ch':'stitch' in op?op.stitch!=='ch':!('color' in op)))
+          throw new PatternSyntaxError('Use start: ch 11 for a flat chain foundation, or start: magic ring for rounds.');
+        const count=operations.reduce((n,op)=>n+operationCounts(op).output,0);
+        if(count<2)throw new PatternSyntaxError('A flat foundation needs at least 2 chains: one working chain and one turning chain.');
+        const stitches:Stitch[]=[];
+        for(const op of operations) {
+          if(typeof op!=='string' && 'color' in op){color=op.color;continue;}
+          const id=parsed.stitches.length+stitches.length;
+          stitches.push({id,round:0,index:stitches.length,type:'ch',color:typeof op!=='string'&&'stitch' in op?op.colors[0]??color:color,
+            parents:stitches.length?[id-1]:[],previous:stitches.length?id-1:null,sourceLine:lineNumber,isIncrease:false,
+            auxiliary:{kind:'foundation',step:stitches.length+1,count}});
+        }
+        parsed.chainStart={line:lineNumber,stitches};parsed.construction='rows';parsed.stitches.push(...stitches);
+        coursePrevious=stitches.at(-1)!.id;
+        continue;
+      }
+      if (/^start:\s*magic ring$/i.test(line)) {
+        if(parsed.chainStart)throw new PatternSyntaxError('Choose one foundation: chain rows or magic-ring rounds.');
+        continue;
+      }
+      if (/^join$/i.test(line)){const last=parsed.rounds.at(-1);if(!last)throw new PatternSyntaxError('Work a round before joining.');last.joined=true;continue;}
+      if (/^fasten off$/i.test(line)) continue;
       const branchPaint = /^paint stitch (\d+):\s*(#[a-f0-9]{6})$/i.exec(line);
       if (branchPaint) {
         branchPaints.push({ id: Number(branchPaint[1]) - 1, color: branchPaint[2], line: lineNumber });
@@ -517,8 +722,13 @@ export function parsePattern(source: string): ParsedPattern {
         throw new PatternSyntaxError(
           "Start each round with its number, for example Rnd 1: 7 sc in mr.",
         );
-      const { operations, foundation, declaredCount, repeatRounds } =
-        analyzeInstruction(roundLine.instruction, parsed.rounds.at(-1)?.outputCount);
+      if(roundLine.kind==='row' && !parsed.chainStart)throw new PatternSyntaxError('Start flat rows with a chain foundation, for example start: ch 11.');
+      const flatRows=parsed.construction==='rows';
+      if(flatRows && roundLine.kind!=='row')throw new PatternSyntaxError('Use Row labels after a chain foundation. Joined-chain rounds are not flat rows.');
+      const { operations, turning, foundation, declaredCount, repeatRounds, parentRoundNumber, endingTurn, joinedRound } =
+        analyzeInstruction(roundLine.instruction, parsed.rounds.find(r=>r.number===Number(/(?:BLO|FLO)\s+of\s+Round\s+(\d+)/i.exec(roundLine.instruction)?.[1]))?.outputCount ?? parsed.rounds.at(-1)?.outputCount ?? (parsed.chainStart?parsed.chainStart.stitches.length-(Number(/in\s+(\d+)(?:nd|rd|th)\s+ch\s+from\s+hook/i.exec(roundLine.instruction)?.[1]??2)-1):undefined),flatRows);
+      if(flatRows && foundation)throw new PatternSyntaxError('Work the first row into the starting chain, without in mr.');
+      if(flatRows && roundLine.start===1 && turning.length && !endingTurn)throw new PatternSyntaxError('The starting chain already includes the first turning chain. Use turn from Row 2 onward.');
       const endRound =
         roundLine.end ?? roundLine.start + (repeatRounds ?? 1) - 1;
       if (
@@ -556,8 +766,8 @@ export function parsePattern(source: string): ParsedPattern {
             "A magic ring can only start round 1. Start another component as a separate pattern.",
           );
         if (
-          roundNumber === 1 &&
-          operations.some((op) => op === "inc" || op === "dec" || (typeof op !== "string" && "stitch" in op && ["inc", "dec"].includes(op.stitch)))
+          roundNumber === 1 && !flatRows &&
+          operations.some((op) => op === "inc" || op === "dec" || op === "dec3" || op === "sk" || (typeof op !== "string" && "stitch" in op && ["inc", "dec", "dec3", "sk"].includes(op.stitch)))
         )
           throw new PatternSyntaxError(
             "Start with foundation stitches, for example 1: 6 sc in mc (6). Increases and decreases need an existing round.",
@@ -565,7 +775,7 @@ export function parsePattern(source: string): ParsedPattern {
 
         const consumed = operations.reduce((n, op) => n + operationCounts(op).input, 0);
         const produced = operations.reduce((n, op) => n + operationCounts(op).output, 0);
-        const totalProduced = operations.reduce((n, op) => n + operationCounts(op).total, 0);
+        const totalProduced = [...turning,...operations].reduce((n, op) => n + operationCounts(op).total, 0);
         const increases = operations.filter((op) => op === "inc" || (typeof op !== "string" && "stitch" in op && op.stitch === "inc")).length;
         const decreases = operations.filter((op) => op === "dec" || (typeof op !== "string" && "stitch" in op && op.stitch === "dec")).length;
         if (parsed.stitches.length + totalProduced > MAX_STITCHES)
@@ -576,18 +786,34 @@ export function parsePattern(source: string): ParsedPattern {
           throw new PatternSyntaxError(
             `Round ${roundNumber} makes ${produced} stitches, but its total says (${declaredCount}). Update the instructions or the total.`,
           );
-        const parentRound = parsed.rounds.at(-1);
+        const parentRound = parentRoundNumber===undefined?parsed.rounds.at(-1):parsed.rounds.find(r=>r.number===parentRoundNumber);
+        if(parentRoundNumber!==undefined&&!parentRound)throw new PatternSyntaxError('The referenced round must already exist.');
+        const firstType=operations.find(op=>typeof op==='string'||'stitch' in op);
+        const firstStitch=typeof firstType==='string'?firstType:firstType&&'stitch' in firstType?firstType.stitch:'sc';
+        const skip=Number(/in\s+(\d+)(?:nd|rd|th)\s+ch\s+from\s+hook/i.exec(roundLine.instruction)?.[1]??1)-1 || (({hdc:2,dc:3,tr:4,dtr:5} as Record<string,number>)[firstStitch]??1);
+        const foundationParents=parsed.chainStart?.stitches.slice(0,-skip).reverse();
+        const parentStitches=parentRound?(flatRows?parentRound.stitches.slice().reverse():parentRound.stitches):foundationParents;
+        if(flatRows && !parentRound && consumed!==foundationParents?.length)
+          throw new PatternSyntaxError(`Row 1 uses ${consumed} chains, but start: ch ${parsed.chainStart!.stitches.length} leaves ${foundationParents?.length??0} after skipping ${skip} turning chain${skip===1?'':'s'}.`);
         if (parentRound && consumed !== parentRound.outputCount) {
           throw new PatternSyntaxError(
             `Round ${roundNumber} uses ${consumed} stitches, but round ${parentRound.number} has ${parentRound.outputCount}. ${consumed > parentRound.outputCount ? "Remove extra stitches or decreases" : "Add stitches or increases"} so the full previous round is used.`,
           );
         }
 
+        if(parentRoundNumber!==undefined){
+          for(const parent of parentStitches??[]) {
+            const requested=operations.find(op=>typeof op!=='string'&&'loop' in op);
+            const loop=requested&&typeof requested!=='string'&&'loop' in requested?requested.loop:undefined;
+            if(!loop || parsed.stitches.some(s=>s.parents.includes(parent.id)&&(!s.loop||s.loop===loop)))throw new PatternSyntaxError('Those loops have already been worked. Choose the free FLO/BLO loops of an earlier round.');
+          }
+        }
         const round: PatternRound = {
           number: roundNumber,
+          ...(joinedRound?{joined:true}:{}),
           color,
           stitches: [],
-          inputCount: parentRound ? consumed : 0,
+          inputCount: parentStitches ? consumed : 0,
           outputCount: produced,
           declaredCount,
           increases,
@@ -597,21 +823,33 @@ export function parsePattern(source: string): ParsedPattern {
         let parentCursor = 0;
         const created: Stitch[] = [];
         let previous: number | null = coursePrevious;
-        const create = (type: StitchType, parents: number[], isIncrease = false, branch?: Stitch["branch"]) => {
+        let activeLoop:'front'|'back'|undefined;
+        const create = (type: StitchType, parents: number[], isIncrease = false, branch?: Stitch["branch"], auxiliary?: Stitch['auxiliary']) => {
           const id = parsed.stitches.length + created.length;
           const stitch: Stitch = {
             id, round: roundNumber,
             index: branch ? branch.step - 1 : round.stitches.length,
             type, color, parents: [...parents], previous,
+            ...(activeLoop?{loop:activeLoop}:{}),
             sourceLine: lineNumber, isIncrease,
             ...(branch ? { branch } : {}),
+            ...(auxiliary ? {auxiliary,index:auxiliary.step-1} : {}),
           };
           created.push(stitch);
-          if (!branch) round.stitches.push(stitch);
+          if (!branch && !auxiliary) round.stitches.push(stitch);
           previous = id;
           return stitch;
         };
+        const turnCount=turning.reduce((n,op)=>n+operationCounts(op).output,0);
+        let turnStep=0;
+        const createTurning=()=>{for(const op of turning) {
+          if(typeof op!=='string'&&'color' in op){color=op.color;continue;}
+          const child=create('ch',previous===null?[]:[previous],false,undefined,{kind:'turning',step:++turnStep,count:turnCount});
+          if(typeof op!=='string'&&'stitch' in op)child.color=op.colors[0]??color;
+        }};
+        if(!endingTurn)createTurning();
         for (const operation of operations) {
+          activeLoop=typeof operation!=='string'&&'loop' in operation?operation.loop:undefined;
           if (typeof operation !== "string" && "color" in operation) {
             color = operation.color;
             continue;
@@ -628,6 +866,24 @@ export function parsePattern(source: string): ParsedPattern {
               child.color = operation.branch.colors?.[step - 1] ?? color;
               chainStitches.push(child);
             }
+            if(operation.branch.back) {
+              let cursor=chain-2;
+              for(const op of operation.branch.back){
+                if(typeof op!=='string'&&'color' in op){color=op.color;continue;}
+                const count=operationCounts(op),parents=chainStitches.slice(Math.max(0,cursor-count.input+1),cursor+1).map(s=>s.id);
+                const step=cursor+1;cursor-=count.input;
+                const children=typeof op!=='string'&&'same' in op?op.same:[op];
+                for(const child of children){
+                  const type=typeof child==='string'?child:'stitch' in child?child.stitch:null;
+                  if(!type||type==='sk')continue;
+                  for(let n=0;n<(type==='inc'?2:1);n++){
+                    const stitch=create(type==='inc'?'sc':type,parents,type==='inc',{anchor:anchor.id,step,length:chain,returning:true});
+                    if(typeof child!=='string'&&'stitch' in child)stitch.color=child.colors[n]??child.colors[0]??color;
+                  }
+                }
+              }
+              continue;
+            }
             for (let step = slip; step >= 1; step--) {
               const child = create("slst", [chainStitches[step - 1].id], false, { anchor: anchor.id, step, length: chain, returning: true });
               child.color = operation.branch.colors?.[chain + slip - step] ?? color;
@@ -636,19 +892,22 @@ export function parsePattern(source: string): ParsedPattern {
             continue;
           }
           const same = typeof operation !== "string" && "same" in operation ? operation.same : null;
-          if (same && !parentRound)
+          if (same && !parentStitches)
             throw new PatternSyntaxError("A same-stitch group needs an existing round to attach to.");
           const typed = typeof operation !== "string" && "stitch" in operation ? operation.stitch : operation;
-          const needed = !parentRound || typed === "ch" ? 0 : typed === "dec" ? 2 : 1;
-          const parents = parentRound?.stitches.slice(parentCursor, parentCursor + needed).map((stitch) => stitch.id) ?? [];
+          const needed = !parentStitches || typed === "ch" ? 0 : typed === "dec3" ? 3 : typed === "dec" ? 2 : 1;
+          const parents = parentStitches?.slice(parentCursor, parentCursor + needed).map((stitch) => stitch.id) ?? [];
           parentCursor += needed;
+          if(typed==="sk")continue;
           if (same) {
             for (const child of same) {
+              activeLoop=typeof child!=='string'&&'loop' in child?child.loop:activeLoop;
               if (typeof child === "string") create(child as StitchType, parents);
               else if ("color" in child) color = child.color;
               else if ("stitch" in child) {
                 const result = create(child.stitch as StitchType, parents);
                 result.color = child.colors[0] ?? color;
+                if(child.countedChain)result.countedChain=child.countedChain;
               }
             }
           } else if (typeof typed === "string") {
@@ -656,14 +915,16 @@ export function parsePattern(source: string): ParsedPattern {
               const result = create(typed === "inc" ? "sc" : typed, parents, typed === "inc");
               if (typeof operation !== "string" && "stitch" in operation)
                 result.color = operation.colors[operation.colors.length === 1 ? 0 : child] ?? color;
+              if(typeof operation!=="string"&&"stitch" in operation&&operation.countedChain)result.countedChain=operation.countedChain;
             }
           }
         }
+        if(endingTurn)createTurning();
         round.color = round.stitches[0].color;
         parsed.rounds.push(round);
         parsed.stitches.push(...created);
         coursePrevious = previous;
-        if (roundNumber === 1 && !foundation)
+        if (roundNumber === 1 && !foundation && !flatRows)
           parsed.diagnostics.push({
             line: lineNumber,
             severity: "warning",
@@ -702,7 +963,7 @@ export function parsePattern(source: string): ParsedPattern {
   }
   for (const round of parsed.rounds) round.color = round.stitches[0].color;
   for (const segment of parsed.embroidery) {
-    const message = validateEmbroidery(segment, parsed.rounds, closesLastRound(parsed.rounds.map(r=>r.outputCount),parsed.edge));
+    const message = parsed.construction==='rows' && (segment.from.round<1||segment.to.round<1) ? 'Embroidery needs a point on a completed row.' : validateEmbroidery(segment, parsed.rounds, parsed.construction!=='rows' && closesLastRound(parsed.rounds.map(r=>r.outputCount),parsed.edge));
     if (message) parsed.diagnostics.push({ line: segment.line, severity: 'error', message });
   }
   for (const eyes of parsed.eyes) {
@@ -714,7 +975,7 @@ export function parsePattern(source: string): ParsedPattern {
   // rounds identify a head-first construction, so display that end at the top.
   // An explicit user choice always takes precedence over this default.
   if (
-    !explicitOrientation &&
+    !explicitOrientation && parsed.construction!=='rows' &&
     parsed.eyes.length > 0 &&
     parsed.eyes.every((eyes) =>
       validateEyePair(eyes, parsed.rounds) === null &&
@@ -729,7 +990,7 @@ export function parsePattern(source: string): ParsedPattern {
     parsed.diagnostics.push({
       line: 1,
       severity: "warning",
-      message: "Start with a foundation round, for example 1: 6 sc in mc (6).",
+      message: parsed.chainStart?`Add Row 1: ${parsed.chainStart.stitches.length-1} sc across to work into the chain.`:"Start with a foundation round, for example 1: 6 sc in mc (6).",
     });
   }
   return parsed;

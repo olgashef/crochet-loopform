@@ -2,7 +2,7 @@ import type { ProjectSettings } from './projectLibrary';
 import { validPlacement, type PiecePlacement } from './assembly';
 import { EXAMPLES } from './pattern';
 import { sanitizeRowOffsets, type RowOffsets } from './rowOffsets';
-export interface Piece { id: string; name: string; source: string; rowOffsets: RowOffsets; placement?: PiecePlacement; hidden?: boolean }
+export interface Piece { templateId?: string; id: string; name: string; source: string; rowOffsets: RowOffsets; placement?: PiecePlacement; hidden?: boolean }
 export interface Project { id?: string; settings?: ProjectSettings; version: 2; name: string; pieces: Piece[]; activeId: string }
 export const STARTER = `Pattern name: "Honey bear"
 start: magic ring
@@ -31,7 +31,20 @@ fasten off
 paint 9: 17=#f3e8d6, 18=#f3e8d6, 19=#f3e8d6, 20=#f3e8d6
 paint 10: 16=#f3e8d6, 17=#f3e8d6, 18=#f3e8d6, 19=#f3e8d6, 20=#f3e8d6, 21=#f3e8d6
 paint 11: 17=#f3e8d6, 18=#f3e8d6, 19=#f3e8d6, 20=#f3e8d6`;
+export const CHAIN_START = `Pattern name: "Chain rows"
+[#F3E8D6]
+start: ch 11
+
+Row 1: 10 sc across → 10
+Row 2: ch 1, turn, 10 sc across → 10`;
+export const OVAL_START = `Pattern name: "Chain round foundation"
+[#79DCDC]
+start: ch 7 around
+Round 1: 5sc, [sc, sc, sc, sc] in same st, other side, 4sc, [sc, sc, sc] in same st → 16
+Round 2: inc, 4sc, 4inc, 4sc, 3inc → 24`;
 export const STUDIO_EXAMPLES = [
+  { name: 'Chain round foundation', description: 'Work around both sides of a chain', source: OVAL_START },
+  { name: 'Chain rows', description: 'A chain foundation with flat, turning rows', source: CHAIN_START },
   { name: 'Honey bear', description: 'A rounded head with a cream muzzle', source: STARTER },
   { name: 'Little bee', description: 'Learn shaping and striped colorwork', source: `Pattern name: "Little bee"
 start: magic ring
@@ -93,9 +106,12 @@ export function validProject(value: unknown): value is Project {
       && Number(row) >= 1 && Number(row) <= 150 && typeof offset === 'number'
       && Number.isFinite(offset) && Math.abs(offset) <= 1000)) return false;
     if (piece.placement !== undefined && !validPlacement(piece.placement)) return false;
+    if (piece.templateId !== undefined && typeof piece.templateId !== "string") return false;
     if (piece.hidden !== undefined && typeof piece.hidden !== 'boolean') return false;
     ids.add(piece.id);
   }
+  const validatedPieces=value.pieces as Piece[];
+  if(validatedPieces.some(p=>p.templateId && (!validatedPieces.some(t=>t.id===p.templateId && !t.templateId) || p.id===validatedPieces[0].id)))return false;
   const mainId = value.pieces[0].id;
   for (const piece of value.pieces) {
     if (piece.placement?.parentId && (piece.id === mainId || piece.placement.parentId !== mainId)) return false;

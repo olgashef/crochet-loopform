@@ -2,12 +2,33 @@ import { DoubleSide, Mesh, MeshBasicMaterial, Raycaster, Vector3 } from 'three';
 import { createFabricGeometry } from './fabricGeometry';
 import type { ModelGeometry } from './geometry';
 import type { EmbroideryAnchor } from './embroidery';
+import { flatSurface } from './flatGeometry';
 
 const TAU = Math.PI * 2;
 const wrap = (angle: number) => (angle % TAU + TAU) % TAU;
 
 /** A smooth surface through body stitches, independent of tails and bobbles. */
 export function embroiderySurface(model: ModelGeometry) {
+  if(model.construction==='rows') {
+    const flat=flatSurface(model),maximum=flat.rows.length;
+    const sample=(anchor:EmbroideryAnchor,lift=0)=>{
+      const p=anchor.round<1||anchor.round>maximum?null:flat.sample(anchor.round,anchor.angle/360);
+      return p?{position:p.position.add(new Vector3(0,0,lift)),normal:new Vector3(0,0,1)}:null;
+    };
+    const pick=(hit:Vector3):EmbroideryAnchor|null=>{
+      let best:EmbroideryAnchor|null=null,distance=Infinity;
+      for(let row=1;row<=maximum;row++) {
+        const left=flat.sample(row,0)!,right=flat.sample(row,1)!;
+        const u=Math.max(0,Math.min(.999999,(hit.x-left.position.x)/(right.position.x-left.position.x)));
+        const a=flat.sample(row,u)!.position,b=flat.sample(Math.min(maximum,row+1),u)!.position;
+        const delta=b.clone().sub(a),t=Math.max(0,Math.min(1,hit.clone().sub(a).dot(delta)/(delta.lengthSq()||1)));
+        const d=a.addScaledVector(delta,t).distanceToSquared(hit);
+        if(d<distance){distance=d;best={round:row+t,angle:u*360};}
+      }
+      return best;
+    };
+    return {sample,pick,project:(point:Vector3,_outward:Vector3)=>new Vector3(point.x,point.y,0),dispose:()=>{},maximum};
+  }
   const rings = model.roundCenters.map(course => ({
     round: course.round, center: new Vector3().fromArray(course.center),
     points: model.points.filter(p => p.round === course.round && !p.branch).map(p => ({

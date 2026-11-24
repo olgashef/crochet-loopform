@@ -1,12 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Plus, Trash2, Palette } from "lucide-react";
+import { Plus, Trash2, Palette, GripVertical } from "lucide-react";
 import {
   analyzeInstruction,
+  parsePattern,
   readRoundLine,
   YARN_COLORS,
   type Diagnostic,
 } from "../lib/pattern";
 import {
+  moveWorksheetRow,
   deleteWorksheetRow,
   editWorksheetRow,
   insertWorksheetRow,
@@ -21,6 +23,7 @@ interface Props {
   selectedLine: number | null;
   onRender: () => void;
   onEditingChange: (line: number | null) => void;
+  onActiveLineChange: (line: number | null) => void;
 }
 export function PatternWorksheet({
   value,
@@ -29,7 +32,14 @@ export function PatternWorksheet({
   selectedLine,
   onRender,
   onEditingChange,
+  onActiveLineChange,
 }: Props) {
+  const dragging=useRef<{line:number;source:string}|null>(null);
+  const [dropTarget,setDropTarget]=useState<{line:number;after:boolean}|null>(null);
+  function move(from:number,to:number,after=false) {
+    const next=moveWorksheetRow(value,from,to,after);
+    onChange(next);setActive(null);onEditingChange(null);onActiveLineChange(null);lastActive.current=null;setDropTarget(null);
+  }
   const [feedback, setFeedback] = useState("");
   function onChange(next: string) {
     if (next.length > 120000) {
@@ -40,6 +50,8 @@ export function PatternWorksheet({
     writeSource(next);
   }
   const lines = useMemo(() => value.split(/\r?\n/), [value]);
+  const parsed = useMemo(()=>parsePattern(value),[value]);
+  const course=parsed.construction==='rows'?'row':'round';
   const fields = useRef(new Map<number, HTMLTextAreaElement>());
   const pendingFocus = useRef<number | null>(null);
   const lastActive = useRef<number | null>(null);
@@ -55,7 +67,7 @@ export function PatternWorksheet({
   let next = 1;
   if (last) {
     try {
-      next = last.start + (analyzeInstruction(last.body).repeatRounds ?? 1);
+      next = last.start + (analyzeInstruction(last.body,undefined,last.kind==='row').repeatRounds ?? 1);
     } catch {
       next = (last.end ?? last.start) + 1;
     }
@@ -92,7 +104,7 @@ export function PatternWorksheet({
   }
   const roundLabels = new Map(rows.map((row) => [row.line, row]));
   return (
-    <div className="pattern-worksheet">
+    <div className="pattern-worksheet" onMouseLeave={() => onActiveLineChange(lastActive.current)}>
       <div className="worksheet-title">
         <span>PATTERN NAME</span>
         <input
@@ -107,7 +119,7 @@ export function PatternWorksheet({
         />
       </div>
       <div className="worksheet-columns" aria-hidden="true">
-        <span>ROUND</span>
+        <span>{course.toUpperCase()}</span>
         <span>INSTRUCTIONS</span>
         <span>TOTAL</span>
         <span />
@@ -121,7 +133,7 @@ export function PatternWorksheet({
             let hold = 1;
             let message = "";
             try {
-              const summary = analyzeInstruction(row.body);
+              const summary = analyzeInstruction(row.body,parsed.rounds.find(r=>r.line===line)?.inputCount || undefined,row.kind==='row');
               count = summary.outputCount;
               hold = summary.repeatRounds ?? 1;
             } catch (error) {
@@ -136,11 +148,35 @@ export function PatternWorksheet({
             const showError = !!diagnostic && active !== line;
             return (
               <div
-                className={`worksheet-row ${active === line ? "editing" : ""} ${selectedLine === line ? "selected" : ""} ${showError ? "invalid" : ""}`}
+                className={`worksheet-row ${active === line ? "editing" : ""} ${selectedLine === line ? "selected" : ""} ${showError ? "invalid" : ""} ${dropTarget?.line===line?(dropTarget.after?"drop-after":"drop-before"):""}`}
                 key={line}
+                onMouseEnter={() => onActiveLineChange(line)}
+                onMouseLeave={() => onActiveLineChange(lastActive.current)}
+                onFocusCapture={() => onActiveLineChange(line)}
+                onClick={() => {lastActive.current=line;onActiveLineChange(line);}}
+                onDragOver={e=>{
+                  if(!dragging.current)return;
+                  e.preventDefault();e.dataTransfer.dropEffect='move';
+                  const rect=e.currentTarget.getBoundingClientRect();
+                  setDropTarget({line,after:e.clientY>rect.top+rect.height/2});
+                }}
+                onDrop={e=>{
+                  if(!dragging.current)return;
+                  e.preventDefault();
+                  const rect=e.currentTarget.getBoundingClientRect();
+                  if(dragging.current.source===value)move(dragging.current.line,line,e.clientY>rect.top+rect.height/2);
+                  dragging.current=null;setDropTarget(null);
+                }}
               >
                 <span className="worksheet-round">
-                  Rnd {row.start}
+                  <button className="round-drag-handle" draggable title={`Drag ${course} · Alt+Up/Down to move`} aria-label={`Move ${course} ${row.start}`} onDragStart={e=>{
+                    dragging.current={line,source:value};e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',String(row.start));
+                  }} onDragEnd={()=>{dragging.current=null;setDropTarget(null);}} onKeyDown={e=>{
+                    if(!e.altKey || !['ArrowUp','ArrowDown'].includes(e.key))return;
+                    e.preventDefault();const i=rows.findIndex(r=>r.line===line),down=e.key==='ArrowDown';
+                    const target=rows[i+(down?1:-1)];if(target)move(line,target.line,down);
+                  }}><GripVertical size={14}/></button>
+                  {row.kind==='row'?'Row':'Rnd'} {row.start}
                   {hold > 1
                     ? "–" + (row.start + hold - 1)
                     : row.end !== null
@@ -153,17 +189,18 @@ export function PatternWorksheet({
                       if (node) fields.current.set(line, node);
                       else fields.current.delete(line);
                     }}
-                    aria-label={`Instructions for round ${row.start}`}
+                    aria-label={`Instructions for ${course} ${row.start}`}
                     aria-invalid={showError}
                     value={row.body}
                     rows={1}
                     placeholder={
-                      row.start === 1 ? "7 sc in mr" : "[sc, inc] × 7"
+                      course==='row'?(row.start===1?'10 sc across':'ch 1, turn, 10 sc across'):row.start === 1 ? "7 sc in mr" : "[sc, inc] × 7"
                     }
                     spellCheck={false}
                     onFocus={() => {
                       setActive(line);
                       onEditingChange(line);
+                      onActiveLineChange(line);
                       lastActive.current = line;
                     }}
                     onBlur={() => {
@@ -223,10 +260,10 @@ export function PatternWorksheet({
                 </div>
                 <output
                   className={`worksheet-count ${count === null ? "pending" : ""}`}
-                  aria-label={`Stitch count for round ${row.start}`}
+                  aria-label={`Stitch count for ${course} ${row.start}`}
                   title={
                     count !== null
-                      ? `${count} stitches${hold > 1 ? " in each round" : ""}`
+                      ? `${count} stitches${hold > 1 ? ` in each ${course}` : ""}`
                       : message
                   }
                   aria-live="polite"
@@ -237,8 +274,8 @@ export function PatternWorksheet({
                 <div className="worksheet-row-tools">
                   <button
                     tabIndex={-1}
-                    title="Insert a round below"
-                    aria-label={`Insert after round ${row.start}`}
+                    title={`Insert a ${course} below`}
+                    aria-label={`Insert after ${course} ${row.start}`}
                     disabled={next > 150}
                     onClick={() => add(line)}
                   >
@@ -246,8 +283,8 @@ export function PatternWorksheet({
                   </button>
                   <button
                     tabIndex={-1}
-                    title="Delete round"
-                    aria-label={`Delete round ${row.start}`}
+                    title={`Delete ${course}`}
+                    aria-label={`Delete ${course} ${row.start}`}
                     onClick={() => onChange(deleteWorksheetRow(value, line))}
                   >
                     <Trash2 size={11} />
@@ -297,9 +334,9 @@ export function PatternWorksheet({
         <div className="worksheet-add">
           <button disabled={next > 150} onClick={() => add()}>
             <Plus size={13} />
-            {rows.length ? "Add round" : "Write your first round"}
+            {rows.length ? `Add ${course}` : `Write your first ${course}`}
           </button>
-          <span>Enter → next round</span>
+          <span>Enter → next {course}</span>
         </div>
       </div>
       <div className="worksheet-footer">
@@ -310,11 +347,10 @@ export function PatternWorksheet({
         )}
         <span>Counts are calculated for you.</span>
         <small>
-          <strong>Tip</strong> Write <code>49 sc for 8 rounds</code> to group
-          rounds.
+          <strong>Tip</strong> Write <code>{course==='row'?'ch 1, turn, 10 sc across for 8 rows':'49 sc for 8 rounds'}</code> to group {course}s.
         </small>
         <small>
-          Change color within a round: <code>[red] 4 sc, [beige] 4 sc</code>.
+          Change color within a {course}: <code>[red] 4 sc, [beige] 4 sc</code>.
         </small>
         <small>
           Raised stitch: <code>bobble</code>. Shared stitch: <code>[bobble, sc] in same st</code>.

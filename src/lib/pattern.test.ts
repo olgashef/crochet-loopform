@@ -159,7 +159,7 @@ test("both under-consumption and over-consumption identify the affected round", 
 });
 
 test("unsupported stitches and unmatched groups fail clearly", () => {
-  assert.match(errors("1: 6 puff in mc (6)")[0].message, /Unknown stitch/);
+  assert.match(errors("1: 6 unsupported in mc (6)")[0].message, /Unknown stitch/);
   assert.match(
     errors("1: [6 sc in mc (6)")[0].message,
     /Unknown stitch|missing/,

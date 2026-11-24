@@ -23,5 +23,17 @@ export function createYarnGeometry(radius: number) {
     }
   }
   geometry.computeVertexNormals();
+  const variants=[1,2,3,4,5].map(count=>{
+    const chainPoints:Vector3[]=[];
+    for(let link=0;link<count;link++)for(let i=0;i<12;i++){
+      const p=curve.getPoint(i/12);
+      chainPoints.push(new Vector3(p.x*.72,p.y/count+(link-(count-1)/2)*radius*3.1/count,p.z));
+    }
+    const path=new CatmullRomCurve3(chainPoints,false,'centripetal');
+    return new TubeGeometry(path,segments,radius*.40,radial,false);
+  });
+  geometry.morphAttributes.position=variants.map(g=>g.getAttribute('position').clone());
+  geometry.morphAttributes.normal=variants.map(g=>g.getAttribute('normal').clone());
+  variants.forEach(g=>g.dispose());
   return geometry;
 }
